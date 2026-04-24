@@ -1,0 +1,20 @@
+[
+  {
+    "name": "nebulaScene",
+    "type": "render",
+    "description": "Wide atmospheric render voice for SuperCollider scene tracks.",
+    "parameters": ["freq", "amp", "out", "gate"]
+  },
+  {
+    "name": "tapeBloom",
+    "type": "fx",
+    "description": "Soft saturation and bloom-style FX proxy for audio tracks.",
+    "parameters": ["inBus", "out", "drive", "mix"]
+  },
+  {
+    "name": "freezeFx",
+    "type": "fx",
+    "description": "Spectral hold/freeze proxy for printed audio effects.",
+    "parameters": ["inBus", "out", "freeze", "mix"]
+  }
+]

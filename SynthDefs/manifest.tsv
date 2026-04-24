@@ -1,0 +1,4 @@
+# name	kind	source	output
+nebulaScene	render	nebulaScene.scd	nebulaScene.scsyndef
+tapeBloom	fx	tapeBloom.scd	tapeBloom.scsyndef
+freezeFx	fx	freezeFx.scd	freezeFx.scsyndef
