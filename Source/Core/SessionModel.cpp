@@ -129,7 +129,10 @@ var processorToVar(const TrackProcessorState& processor)
     object->setProperty("kind", enumToInt(processor.kind));
     object->setProperty("name", processor.name);
     object->setProperty("pluginIdentifier", processor.pluginIdentifier);
+    object->setProperty("pluginStateBase64", processor.pluginStateBase64);
     object->setProperty("bypassed", processor.bypassed);
+    object->setProperty("wetMix", processor.wetMix);
+    object->setProperty("outputTrimDb", processor.outputTrimDb);
     if (processor.superCollider.has_value())
         object->setProperty("superCollider", superColliderScriptToVar(*processor.superCollider));
     return var(object.release());
@@ -143,12 +146,49 @@ TrackProcessorState processorFromVar(const var& value)
         processor.kind = intToEnum(object->getProperty("kind"), ProcessorKind::audioUnit);
         processor.name = object->getProperty("name").toString();
         processor.pluginIdentifier = object->getProperty("pluginIdentifier").toString();
+        processor.pluginStateBase64 = object->getProperty("pluginStateBase64").toString();
         processor.bypassed = static_cast<bool>(object->getProperty("bypassed"));
+        processor.wetMix = object->hasProperty("wetMix")
+            ? static_cast<float>(static_cast<double>(object->getProperty("wetMix")))
+            : 1.0f;
+        processor.outputTrimDb = object->hasProperty("outputTrimDb")
+            ? static_cast<float>(static_cast<double>(object->getProperty("outputTrimDb")))
+            : 0.0f;
         if (object->hasProperty("superCollider"))
             processor.superCollider = superColliderScriptFromVar(object->getProperty("superCollider"));
     }
 
     return processor;
+}
+
+var pluginAutomationLaneToVar(const PluginAutomationLane& lane)
+{
+    auto object = std::make_unique<DynamicObject>();
+    object->setProperty("slotIndex", lane.slotIndex);
+    object->setProperty("parameterIndex", lane.parameterIndex);
+    object->setProperty("parameterName", lane.parameterName);
+    object->setProperty("displayName", lane.displayName);
+    juce::Array<var> points;
+    for (const auto& point : lane.points)
+        points.add(automationPointToVar(point));
+    object->setProperty("points", points);
+    return var(object.release());
+}
+
+PluginAutomationLane pluginAutomationLaneFromVar(const var& value)
+{
+    PluginAutomationLane lane;
+    if (auto* object = value.getDynamicObject())
+    {
+        lane.slotIndex = static_cast<int>(object->getProperty("slotIndex"));
+        lane.parameterIndex = static_cast<int>(object->getProperty("parameterIndex"));
+        lane.parameterName = object->getProperty("parameterName").toString();
+        lane.displayName = object->getProperty("displayName").toString();
+        if (auto* pointsArray = object->getProperty("points").getArray())
+            for (const auto& pointValue : *pointsArray)
+                lane.points.push_back(automationPointFromVar(pointValue));
+    }
+    return lane;
 }
 
 var midiGeneratorToVar(const MidiGeneratorState& generator)
@@ -242,6 +282,7 @@ var trackToVar(const TrackState& track)
     object->setProperty("visibleAutomationLane", enumToInt(track.visibleAutomationLane));
     object->setProperty("automationExpanded", track.automationExpanded);
     object->setProperty("automationWriteMode", enumToInt(track.automationWriteMode));
+    object->setProperty("selectedPluginAutomationLaneIndex", track.selectedPluginAutomationLaneIndex);
 
     juce::Array<var> volumePoints;
     for (const auto& point : track.volumeAutomation)
@@ -252,6 +293,11 @@ var trackToVar(const TrackState& track)
     for (const auto& point : track.panAutomation)
         panPoints.add(automationPointToVar(point));
     object->setProperty("panAutomation", panPoints);
+
+    juce::Array<var> pluginLanes;
+    for (const auto& lane : track.pluginAutomationLanes)
+        pluginLanes.add(pluginAutomationLaneToVar(lane));
+    object->setProperty("pluginAutomationLanes", pluginLanes);
 
     juce::Array<var> regions;
     for (const auto& region : track.regions)
@@ -292,6 +338,7 @@ TrackState trackFromVar(const var& value)
         track.automationWriteTarget = AutomationLaneMode::none;
         track.automationGestureActive = false;
         track.automationLatchActive = false;
+        track.selectedPluginAutomationLaneIndex = static_cast<int>(object->getProperty("selectedPluginAutomationLaneIndex"));
 
         if (auto* array = object->getProperty("volumeAutomation").getArray())
             for (const auto& pointValue : *array)
@@ -300,6 +347,10 @@ TrackState trackFromVar(const var& value)
         if (auto* array = object->getProperty("panAutomation").getArray())
             for (const auto& pointValue : *array)
                 track.panAutomation.push_back(automationPointFromVar(pointValue));
+
+        if (auto* array = object->getProperty("pluginAutomationLanes").getArray())
+            for (const auto& laneValue : *array)
+                track.pluginAutomationLanes.push_back(pluginAutomationLaneFromVar(laneValue));
 
         if (auto* array = object->getProperty("regions").getArray())
             for (const auto& regionValue : *array)
@@ -398,12 +449,14 @@ SessionState createDemoSession()
                 { 7.0, 0.10f, AutomationPoint::SegmentShape::easeOut },
                 { 15.0, -0.02f, AutomationPoint::SegmentShape::linear }
             },
+            {},
+            -1,
             {
                 { "Verse Lead", Colour::fromRGB(236, 94, 90), RegionKind::audio, 1.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f, {} },
                 { "Hook Double", Colour::fromRGB(255, 133, 92), RegionKind::audio, 11.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} }
             },
             {
-                { ProcessorKind::superColliderFx, "SC Tape Bloom", {}, false,
+                { ProcessorKind::superColliderFx, "SC Tape Bloom", {}, {}, false, 1.0f, 0.0f,
                     SuperColliderScriptState { "Tape Bloom", "In.ar(inBus, 2).tanh * 0.8", "tapeBloom", "SynthDef(\\\\tapeBloom)", "Audio Track -> SC FX Bus A", "Live SC insert ready", true, false } }
             },
             {},
@@ -418,6 +471,8 @@ SessionState createDemoSession()
                 { 16.0, 0.72f, AutomationPoint::SegmentShape::linear }
             },
             {},
+            {},
+            -1,
             {
                 { "Intro Beat", Colour::fromRGB(247, 184, 68), RegionKind::midi, 1.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f,
                     makeMidiPhrase({
@@ -448,6 +503,15 @@ SessionState createDemoSession()
                 { 16.0, -0.04f, AutomationPoint::SegmentShape::linear }
             },
             {
+                { 0, 0, "Instrument Param 1", {},
+                    {
+                        { 1.0, 0.42f, AutomationPoint::SegmentShape::linear },
+                        { 9.0, 0.68f, AutomationPoint::SegmentShape::easeOut },
+                        { 16.0, 0.36f, AutomationPoint::SegmentShape::linear }
+                    } }
+            },
+            0,
+            {
                 { "Main Chords", Colour::fromRGB(67, 183, 148), RegionKind::midi, 1.0, 16.0, {}, 0.0, 0.0, 0.0, 1.0f,
                     makeMidiPhrase({
                         { 60, 0.0, 2.0, 98, false }, { 64, 0.0, 2.0, 92, false }, { 67, 0.0, 2.0, 94, false },
@@ -456,7 +520,7 @@ SessionState createDemoSession()
                     }) }
             },
             {
-                { ProcessorKind::audioUnit, "Retro Synth", {}, false, std::nullopt }
+                { ProcessorKind::audioUnit, "Retro Synth", {}, {}, false, 1.0f, 0.0f, std::nullopt }
             },
             {},
             std::nullopt },
@@ -474,6 +538,8 @@ SessionState createDemoSession()
                 { 13.0, 0.22f, AutomationPoint::SegmentShape::easeOut },
                 { 21.0, 0.05f, AutomationPoint::SegmentShape::linear }
             },
+            {},
+            -1,
             {
                 { "Scene Print", juce::Colour::fromRGB(84, 155, 255), RegionKind::generated, 5.0, 12.0, {}, 0.0, 0.0, 0.0, 1.0f, {} },
                 { "Granular Tail", juce::Colour::fromRGB(125, 188, 255), RegionKind::generated, 18.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} }
@@ -495,12 +561,14 @@ SessionState createDemoSession()
                 { 16.0, -0.12f, AutomationPoint::SegmentShape::easeIn },
                 { 18.0, 0.06f, AutomationPoint::SegmentShape::linear }
             },
+            {},
+            -1,
             {
                 { "Reverse Swell", juce::Colour::fromRGB(172, 122, 255), RegionKind::audio, 15.0, 2.0, {}, 0.0, 0.0, 0.0, 1.0f, {} }
             },
             {
-                { ProcessorKind::audioUnit, "Channel EQ", {}, false, std::nullopt },
-                { ProcessorKind::superColliderFx, "SC Resonant Freeze", {}, true,
+                { ProcessorKind::audioUnit, "Channel EQ", {}, {}, false, 1.0f, 0.0f, std::nullopt },
+                { ProcessorKind::superColliderFx, "SC Resonant Freeze", {}, {}, true, 0.72f, -2.0f,
                     SuperColliderScriptState { "Resonant Freeze", "FFT(LocalBuf(2048), In.ar(inBus, 2))", "freezeFx", "Ndef(\\\\freezeFx)", "FX Print -> SC FX Bus A", "Bypassed SC insert", true, false } }
             },
             {},
@@ -525,6 +593,19 @@ juce::String serialiseSessionToJson(const SessionState& session)
     root->setProperty("routingRenderBusName", session.routing.renderBusName);
     root->setProperty("routingFxBusName", session.routing.fxBusName);
     root->setProperty("routingMidiBusName", session.routing.midiBusName);
+    root->setProperty("layoutLeftSidebarWidth", session.layout.leftSidebarWidth);
+    root->setProperty("layoutRightSidebarWidth", session.layout.rightSidebarWidth);
+    root->setProperty("layoutLowerPaneHeight", session.layout.lowerPaneHeight);
+    root->setProperty("layoutLowerPaneExpanded", session.layout.lowerPaneExpanded);
+    root->setProperty("layoutLowerPaneModeValue", session.layout.lowerPaneModeValue);
+    root->setProperty("layoutAudioSelectionExpanded", session.layout.audioSelectionExpanded);
+    root->setProperty("layoutAudioSelectionModeValue", session.layout.audioSelectionModeValue);
+    root->setProperty("layoutMidiSelectionExpanded", session.layout.midiSelectionExpanded);
+    root->setProperty("layoutMidiSelectionModeValue", session.layout.midiSelectionModeValue);
+    root->setProperty("layoutAudioEditorZoom", session.layout.audioEditorZoom);
+    root->setProperty("layoutMidiEditorZoom", session.layout.midiEditorZoom);
+    root->setProperty("layoutAudioEditorTool", session.layout.audioEditorTool);
+    root->setProperty("layoutMidiEditorTool", session.layout.midiEditorTool);
     root->setProperty("selectedTrackId", session.selectedTrackId);
     root->setProperty("selectedRegionTrackId", session.selectedRegionTrackId);
     root->setProperty("selectedRegionIndex", session.selectedRegionIndex);
@@ -554,6 +635,45 @@ juce::Result deserialiseSessionFromJson(SessionState& session, const juce::Strin
     loaded.routing.renderBusName = object->getProperty("routingRenderBusName").toString();
     loaded.routing.fxBusName = object->getProperty("routingFxBusName").toString();
     loaded.routing.midiBusName = object->getProperty("routingMidiBusName").toString();
+    loaded.layout.leftSidebarWidth = object->hasProperty("layoutLeftSidebarWidth")
+        ? static_cast<int>(object->getProperty("layoutLeftSidebarWidth"))
+        : loaded.layout.leftSidebarWidth;
+    loaded.layout.rightSidebarWidth = object->hasProperty("layoutRightSidebarWidth")
+        ? static_cast<int>(object->getProperty("layoutRightSidebarWidth"))
+        : loaded.layout.rightSidebarWidth;
+    loaded.layout.lowerPaneHeight = object->hasProperty("layoutLowerPaneHeight")
+        ? static_cast<int>(object->getProperty("layoutLowerPaneHeight"))
+        : loaded.layout.lowerPaneHeight;
+    loaded.layout.lowerPaneExpanded = object->hasProperty("layoutLowerPaneExpanded")
+        ? static_cast<bool>(object->getProperty("layoutLowerPaneExpanded"))
+        : loaded.layout.lowerPaneExpanded;
+    loaded.layout.lowerPaneModeValue = object->hasProperty("layoutLowerPaneModeValue")
+        ? static_cast<int>(object->getProperty("layoutLowerPaneModeValue"))
+        : (object->hasProperty("layoutLowerPaneMixerMode") && static_cast<bool>(object->getProperty("layoutLowerPaneMixerMode")) ? 1 : 0);
+    loaded.layout.audioSelectionExpanded = object->hasProperty("layoutAudioSelectionExpanded")
+        ? static_cast<bool>(object->getProperty("layoutAudioSelectionExpanded"))
+        : loaded.layout.audioSelectionExpanded;
+    loaded.layout.audioSelectionModeValue = object->hasProperty("layoutAudioSelectionModeValue")
+        ? static_cast<int>(object->getProperty("layoutAudioSelectionModeValue"))
+        : (object->hasProperty("layoutAudioSelectionMixerMode") && static_cast<bool>(object->getProperty("layoutAudioSelectionMixerMode")) ? 1 : 0);
+    loaded.layout.midiSelectionExpanded = object->hasProperty("layoutMidiSelectionExpanded")
+        ? static_cast<bool>(object->getProperty("layoutMidiSelectionExpanded"))
+        : loaded.layout.midiSelectionExpanded;
+    loaded.layout.midiSelectionModeValue = object->hasProperty("layoutMidiSelectionModeValue")
+        ? static_cast<int>(object->getProperty("layoutMidiSelectionModeValue"))
+        : (object->hasProperty("layoutMidiSelectionMixerMode") && static_cast<bool>(object->getProperty("layoutMidiSelectionMixerMode")) ? 1 : 0);
+    loaded.layout.audioEditorZoom = object->hasProperty("layoutAudioEditorZoom")
+        ? static_cast<float>(static_cast<double>(object->getProperty("layoutAudioEditorZoom")))
+        : loaded.layout.audioEditorZoom;
+    loaded.layout.midiEditorZoom = object->hasProperty("layoutMidiEditorZoom")
+        ? static_cast<float>(static_cast<double>(object->getProperty("layoutMidiEditorZoom")))
+        : loaded.layout.midiEditorZoom;
+    loaded.layout.audioEditorTool = object->hasProperty("layoutAudioEditorTool")
+        ? static_cast<int>(object->getProperty("layoutAudioEditorTool"))
+        : loaded.layout.audioEditorTool;
+    loaded.layout.midiEditorTool = object->hasProperty("layoutMidiEditorTool")
+        ? static_cast<int>(object->getProperty("layoutMidiEditorTool"))
+        : loaded.layout.midiEditorTool;
     loaded.selectedTrackId = static_cast<int>(object->getProperty("selectedTrackId"));
     loaded.selectedRegionTrackId = static_cast<int>(object->getProperty("selectedRegionTrackId"));
     loaded.selectedRegionIndex = static_cast<int>(object->getProperty("selectedRegionIndex"));
@@ -653,6 +773,7 @@ juce::String toDisplayString(AutomationLaneMode mode)
         case AutomationLaneMode::none: return "Hidden";
         case AutomationLaneMode::volume: return "Volume";
         case AutomationLaneMode::pan: return "Pan";
+        case AutomationLaneMode::plugin: return "Plugin";
     }
 
     return "Automation";

@@ -84,7 +84,8 @@ enum class AutomationLaneMode
 {
     none,
     volume,
-    pan
+    pan,
+    plugin
 };
 
 enum class AutomationWriteMode
@@ -111,8 +112,20 @@ struct TrackProcessorState
     ProcessorKind kind { ProcessorKind::audioUnit };
     juce::String name;
     juce::String pluginIdentifier;
+    juce::String pluginStateBase64;
     bool bypassed { false };
+    float wetMix { 1.0f };
+    float outputTrimDb { 0.0f };
     std::optional<SuperColliderScriptState> superCollider;
+};
+
+struct PluginAutomationLane
+{
+    int slotIndex { -1 };
+    int parameterIndex { -1 };
+    juce::String parameterName;
+    juce::String displayName;
+    std::vector<AutomationPoint> points;
 };
 
 struct MidiGeneratorState
@@ -144,6 +157,8 @@ struct TrackState
     bool automationLatchActive { false };
     std::vector<AutomationPoint> volumeAutomation;
     std::vector<AutomationPoint> panAutomation;
+    std::vector<PluginAutomationLane> pluginAutomationLanes;
+    int selectedPluginAutomationLaneIndex { -1 };
     std::vector<Region> regions;
     std::vector<TrackProcessorState> inserts;
     MidiGeneratorState midiGenerator;
@@ -167,10 +182,28 @@ struct RoutingState
     juce::String midiBusName { "SC MIDI Clock" };
 };
 
+struct EditorLayoutState
+{
+    int leftSidebarWidth { 240 };
+    int rightSidebarWidth { 392 };
+    int lowerPaneHeight { 318 };
+    bool lowerPaneExpanded { true };
+    int lowerPaneModeValue { 0 };
+    bool audioSelectionExpanded { true };
+    int audioSelectionModeValue { 0 };
+    bool midiSelectionExpanded { true };
+    int midiSelectionModeValue { 0 };
+    float audioEditorZoom { 1.0f };
+    float midiEditorZoom { 1.0f };
+    int audioEditorTool { 0 };
+    int midiEditorTool { 0 };
+};
+
 struct SessionState
 {
     TransportState transport;
     RoutingState routing;
+    EditorLayoutState layout;
     std::vector<TrackState> tracks;
     int selectedTrackId { 1 };
     int selectedRegionTrackId { 1 };

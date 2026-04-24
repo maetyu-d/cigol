@@ -271,9 +271,19 @@ juce::String SuperColliderProcessBridge::describeTrack(const TrackState& track) 
         if (insert.kind == ProcessorKind::superColliderFx && insert.superCollider.has_value())
         {
             const auto synthDefName = resolveFxSynthDefName(track, insert);
-            const auto suffix = activeFxNodes.contains(track.id)
-                ? "fx proxy live"
-                : (runtimeState.scsynthRunning ? "server online" : "server not booted");
+            juce::String suffix;
+            if (const auto hostedIt = hostedInsertRouting.find(track.id); hostedIt != hostedInsertRouting.end() && hostedIt->second.active)
+            {
+                suffix = "host insert live in " + juce::String(hostedIt->second.inputLevel, 2)
+                    + " out " + juce::String(hostedIt->second.outputLevel, 2);
+            }
+            else
+            {
+                suffix = activeFxNodes.contains(track.id)
+                    ? "fx proxy live"
+                    : (runtimeState.scsynthRunning ? "server online" : "server not booted");
+            }
+
             auto description = "SC insert " + insert.name + " | synthdef " + synthDefName + " | audio bus " + juce::String(fxAudioBusForTrack(track)) + " | " + suffix;
 
             if (const auto* descriptor = findSynthDefDescriptor(synthDefName))
@@ -309,6 +319,33 @@ std::vector<SuperColliderTrackSnapshot> SuperColliderProcessBridge::createSnapsh
     }
 
     return snapshots;
+}
+
+void SuperColliderProcessBridge::updateHostedInsertRouting(const SessionState& session,
+                                                           const std::vector<HostedInsertRoutingSnapshot>& snapshots)
+{
+    hostedInsertRouting.clear();
+
+    for (const auto& snapshot : snapshots)
+    {
+        if (snapshot.trackId < 0)
+            continue;
+
+        hostedInsertRouting[snapshot.trackId] = snapshot;
+
+        if (! runtimeState.oscConnected || ! snapshot.active)
+            continue;
+
+        const auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [&snapshot] (const auto& track) {
+            return track.id == snapshot.trackId;
+        });
+
+        if (trackIt == session.tracks.end())
+            continue;
+
+        oscSender.send("/n_set", fxNodeIdForTrack(*trackIt),
+                       juce::String("amp"), juce::jlimit(0.0f, 1.0f, snapshot.outputLevel));
+    }
 }
 
 void SuperColliderProcessBridge::discoverInstallation()

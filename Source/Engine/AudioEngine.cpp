@@ -47,6 +47,25 @@ float interpolateAutomationValue(const std::vector<AutomationPoint>& points, con
     return points.back().value;
 }
 
+float pluginAutomationValueForSlot(const std::vector<PluginAutomationLane>& lanes,
+                                   const int slotIndex,
+                                   const int parameterIndex,
+                                   const double beat,
+                                   const float fallback)
+{
+    const auto laneIt = std::find_if(lanes.begin(), lanes.end(), [slotIndex, parameterIndex] (const auto& lane)
+    {
+        return lane.slotIndex == slotIndex
+            && lane.parameterIndex == parameterIndex
+            && ! lane.points.empty();
+    });
+
+    if (laneIt == lanes.end())
+        return fallback;
+
+    return juce::jlimit(0.0f, 1.0f, interpolateAutomationValue(laneIt->points, beat, fallback));
+}
+
 float bipolarPanLeftGain(const float pan)
 {
     return pan <= 0.0f ? 1.0f : 1.0f - pan;
@@ -55,6 +74,14 @@ float bipolarPanLeftGain(const float pan)
 float bipolarPanRightGain(const float pan)
 {
     return pan >= 0.0f ? 1.0f : 1.0f + pan;
+}
+
+float bufferPeakLevel(const juce::AudioBuffer<float>& buffer)
+{
+    auto peak = 0.0f;
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        peak = juce::jmax(peak, buffer.getMagnitude(channel, 0, buffer.getNumSamples()));
+    return peak;
 }
 
 float midiRegionEnvelope(const double noteBeatOffset,
@@ -297,6 +324,186 @@ std::vector<AudioEngine::LoadablePluginChoice> AudioEngine::getAvailablePluginCh
     return choices;
 }
 
+std::vector<AudioEngine::AutomatableParameterChoice> AudioEngine::getAutomatableParameters(int trackId) const
+{
+    std::vector<AutomatableParameterChoice> choices;
+    const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+
+    const auto runtimeIt = std::find_if(hostedTrackRuntimes.begin(), hostedTrackRuntimes.end(), [trackId] (const auto& runtime) {
+        return runtime.trackId == trackId;
+    });
+
+    if (runtimeIt == hostedTrackRuntimes.end())
+        return choices;
+
+    for (const auto& slot : runtimeIt->slots)
+    {
+        if (slot.instance == nullptr || slot.bypassed)
+            continue;
+
+        const auto& parameters = slot.instance->getParameters();
+        for (int parameterIndex = 0; parameterIndex < static_cast<int>(parameters.size()); ++parameterIndex)
+        {
+            if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+                choices.push_back({ slot.slotIndex,
+                                    parameterIndex,
+                                    "Slot " + juce::String(slot.slotIndex + 1) + " / " + parameter->getName(48),
+                                    parameter->getValue() });
+        }
+    }
+
+    return choices;
+}
+
+AudioEngine::PluginParameterBindingStatus AudioEngine::getTrackPluginParameterBindingStatus(int trackId, int slotIndex, int parameterIndex) const
+{
+    PluginParameterBindingStatus status;
+    const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+
+    const auto runtimeIt = std::find_if(hostedTrackRuntimes.begin(), hostedTrackRuntimes.end(), [trackId] (const auto& runtime) {
+        return runtime.trackId == trackId;
+    });
+
+    if (runtimeIt == hostedTrackRuntimes.end())
+        return status;
+
+    const auto slotIt = std::find_if(runtimeIt->slots.begin(), runtimeIt->slots.end(), [slotIndex] (const auto& slot) {
+        return slot.slotIndex == slotIndex && slot.instance != nullptr && ! slot.bypassed;
+    });
+
+    if (slotIt == runtimeIt->slots.end())
+        return status;
+
+    status.slotAvailable = true;
+    const auto& parameters = slotIt->instance->getParameters();
+    if (parameterIndex < 0 || parameterIndex >= static_cast<int>(parameters.size()))
+        return status;
+
+    if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+    {
+        status.parameterAvailable = true;
+        status.resolvedName = "Slot " + juce::String(slotIndex + 1) + " / " + parameter->getName(48);
+    }
+
+    return status;
+}
+
+float AudioEngine::getTrackPluginParameterValue(int trackId, int slotIndex, int parameterIndex) const
+{
+    const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+
+    const auto runtimeIt = std::find_if(hostedTrackRuntimes.begin(), hostedTrackRuntimes.end(), [trackId] (const auto& runtime) {
+        return runtime.trackId == trackId;
+    });
+
+    if (runtimeIt == hostedTrackRuntimes.end())
+        return 0.5f;
+
+    const auto slotIt = std::find_if(runtimeIt->slots.begin(), runtimeIt->slots.end(), [slotIndex] (const auto& slot) {
+        return slot.slotIndex == slotIndex && slot.instance != nullptr && ! slot.bypassed;
+    });
+
+    if (slotIt == runtimeIt->slots.end())
+        return 0.5f;
+
+    const auto& parameters = slotIt->instance->getParameters();
+    if (parameterIndex < 0 || parameterIndex >= static_cast<int>(parameters.size()))
+        return 0.5f;
+
+    if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+        return parameter->getValue();
+
+    return 0.5f;
+}
+
+bool AudioEngine::setTrackPluginParameterValue(int trackId, int slotIndex, int parameterIndex, float normalisedValue)
+{
+    const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+
+    const auto runtimeIt = std::find_if(hostedTrackRuntimes.begin(), hostedTrackRuntimes.end(), [trackId] (const auto& runtime) {
+        return runtime.trackId == trackId;
+    });
+
+    if (runtimeIt == hostedTrackRuntimes.end())
+        return false;
+
+    const auto slotIt = std::find_if(runtimeIt->slots.begin(), runtimeIt->slots.end(), [slotIndex] (const auto& slot) {
+        return slot.slotIndex == slotIndex && slot.instance != nullptr && ! slot.bypassed;
+    });
+
+    if (slotIt == runtimeIt->slots.end())
+        return false;
+
+    const auto& parameters = slotIt->instance->getParameters();
+    if (parameterIndex < 0 || parameterIndex >= static_cast<int>(parameters.size()))
+        return false;
+
+    if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+    {
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, normalisedValue));
+        parameter->endChangeGesture();
+        return true;
+    }
+
+    return false;
+}
+
+std::optional<AudioEngine::HostedInsertMeterState> AudioEngine::getHostedInsertMeterState(int trackId, int slotIndex) const
+{
+    const juce::SpinLock::ScopedLockType lock(hostedInsertMeterLock);
+
+    const auto it = std::find_if(hostedInsertMeterStates.begin(), hostedInsertMeterStates.end(), [trackId, slotIndex] (const auto& state)
+    {
+        return state.trackId == trackId && state.slotIndex == slotIndex;
+    });
+
+    if (it == hostedInsertMeterStates.end())
+        return std::nullopt;
+
+    return *it;
+}
+
+bool AudioEngine::setTrackSlotBypassed(int trackId, int slotIndex, bool bypassed)
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track) { return track.id == trackId; });
+    if (trackIt == session.tracks.end() || slotIndex < 0 || slotIndex >= static_cast<int>(trackIt->inserts.size()))
+        return false;
+
+    trackIt->inserts[static_cast<size_t>(slotIndex)].bypassed = bypassed;
+
+    {
+        const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+        const auto runtimeIt = std::find_if(hostedTrackRuntimes.begin(), hostedTrackRuntimes.end(), [trackId] (const auto& runtime) {
+            return runtime.trackId == trackId;
+        });
+
+        if (runtimeIt != hostedTrackRuntimes.end())
+            for (auto& slot : runtimeIt->slots)
+                if (slot.slotIndex == slotIndex)
+                    slot.bypassed = bypassed;
+    }
+
+    syncTrackPlaybackStates();
+    return true;
+}
+
+bool AudioEngine::setTrackSuperColliderInsertMix(int trackId, int slotIndex, float wetMix, float outputTrimDb)
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track) { return track.id == trackId; });
+    if (trackIt == session.tracks.end() || slotIndex < 0 || slotIndex >= static_cast<int>(trackIt->inserts.size()))
+        return false;
+
+    auto& slot = trackIt->inserts[static_cast<size_t>(slotIndex)];
+    if (slot.kind != ProcessorKind::superColliderFx || ! slot.superCollider.has_value())
+        return false;
+
+    slot.wetMix = juce::jlimit(0.0f, 1.0f, wetMix);
+    slot.outputTrimDb = juce::jlimit(-24.0f, 24.0f, outputTrimDb);
+    syncTrackPlaybackStates();
+    return true;
+}
+
 bool AudioEngine::setTrackSlotPlugin(int trackId, int slotIndex, const juce::String& pluginIdentifier)
 {
     auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track) { return track.id == trackId; });
@@ -314,7 +521,10 @@ bool AudioEngine::setTrackSlotPlugin(int trackId, int slotIndex, const juce::Str
     slot.kind = ProcessorKind::audioUnit;
     slot.name = description.name;
     slot.pluginIdentifier = description.fileOrIdentifier;
+    slot.pluginStateBase64.clear();
     slot.bypassed = false;
+    slot.wetMix = 1.0f;
+    slot.outputTrimDb = 0.0f;
     slot.superCollider.reset();
 
     refreshHostedPlugins();
@@ -330,7 +540,10 @@ void AudioEngine::clearTrackSlotPlugin(int trackId, int slotIndex)
     auto& slot = trackIt->inserts[static_cast<size_t>(slotIndex)];
     slot.name.clear();
     slot.pluginIdentifier.clear();
+    slot.pluginStateBase64.clear();
     slot.bypassed = false;
+    slot.wetMix = 1.0f;
+    slot.outputTrimDb = 0.0f;
     if (slot.kind == ProcessorKind::audioUnit)
         slot.superCollider.reset();
 
@@ -361,6 +574,39 @@ std::unique_ptr<juce::AudioProcessorEditor> AudioEngine::createTrackSlotEditor(i
     return {};
 }
 
+void AudioEngine::syncPluginStatesToSession()
+{
+    const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+
+    for (auto& track : session.tracks)
+    {
+        auto runtimeIt = std::find_if(hostedTrackRuntimes.begin(), hostedTrackRuntimes.end(), [&track] (const auto& runtime) {
+            return runtime.trackId == track.id;
+        });
+
+        if (runtimeIt == hostedTrackRuntimes.end())
+            continue;
+
+        for (auto& insert : track.inserts)
+            if (insert.kind == ProcessorKind::audioUnit)
+                insert.pluginStateBase64.clear();
+
+        for (const auto& slot : runtimeIt->slots)
+        {
+            if (slot.slotIndex < 0
+                || slot.slotIndex >= static_cast<int>(track.inserts.size())
+                || slot.instance == nullptr)
+                continue;
+
+            juce::MemoryBlock stateData;
+            slot.instance->getStateInformation(stateData);
+            track.inserts[static_cast<size_t>(slot.slotIndex)].pluginStateBase64 = stateData.getSize() > 0
+                ? stateData.toBase64Encoding()
+                : juce::String();
+        }
+    }
+}
+
 void AudioEngine::reloadSessionState()
 {
     syncTrackPlaybackStates();
@@ -373,6 +619,15 @@ void AudioEngine::timerCallback()
 {
     syncTrackPlaybackStates();
     updateMeters();
+
+    std::vector<HostedInsertRoutingSnapshot> routingSnapshots;
+    {
+        const juce::SpinLock::ScopedLockType lock(hostedInsertMeterLock);
+        routingSnapshots.reserve(hostedInsertMeterStates.size());
+        for (const auto& state : hostedInsertMeterStates)
+            routingSnapshots.push_back({ state.trackId, state.slotIndex, state.inputLevel, state.outputLevel, state.active });
+    }
+    superColliderBridge.updateHostedInsertRouting(session, routingSnapshots);
 }
 
 void AudioEngine::scanForPlugins()
@@ -458,6 +713,12 @@ void AudioEngine::refreshHostedPlugins()
                 continue;
 
             instance->prepareToPlay(currentSampleRate, currentBlockSize);
+            if (insert.pluginStateBase64.isNotEmpty())
+            {
+                juce::MemoryBlock stateData;
+                if (stateData.fromBase64Encoding(insert.pluginStateBase64))
+                    instance->setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
+            }
             HostedPluginRuntime runtime;
             runtime.slotIndex = static_cast<int>(slotIndex);
             runtime.identifier = insert.pluginIdentifier;
@@ -529,6 +790,18 @@ void AudioEngine::syncTrackPlaybackStates()
         state.pan = track.mixer.pan;
         state.volumeAutomation = track.volumeAutomation;
         state.panAutomation = track.panAutomation;
+        state.pluginAutomationLanes = track.pluginAutomationLanes;
+        state.selectedPluginAutomationLaneIndex = track.selectedPluginAutomationLaneIndex;
+        for (size_t slotIndex = 0; slotIndex < track.inserts.size(); ++slotIndex)
+        {
+            const auto& insert = track.inserts[slotIndex];
+            state.inserts.push_back({ static_cast<int>(slotIndex),
+                                      insert.kind,
+                                      insert.bypassed,
+                                      insert.superCollider.has_value(),
+                                      insert.wetMix,
+                                      insert.outputTrimDb });
+        }
 
         for (const auto& region : track.regions)
         {
@@ -596,7 +869,9 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
         return;
 
     juce::AudioBuffer<float> trackBuffer(2, buffer.getNumSamples());
+    juce::AudioBuffer<float> superColliderSendBuffer(2, buffer.getNumSamples());
     juce::MidiBuffer pluginMidi;
+    std::vector<HostedInsertMeterState> meterUpdates;
 
     for (const auto& track : playbackStatesCopy)
     {
@@ -680,7 +955,43 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
                         if (slot.bypassed || slot.instance == nullptr || slot.isInstrument)
                             continue;
 
-                        slot.instance->processBlock(trackBuffer, pluginMidi);
+                        const auto insertIt = std::find_if(track.inserts.begin(), track.inserts.end(), [&slot] (const auto& insert) {
+                            return insert.slotIndex == slot.slotIndex;
+                        });
+
+                        const auto& parameters = slot.instance->getParameters();
+                        for (int parameterIndex = 0; parameterIndex < static_cast<int>(parameters.size()); ++parameterIndex)
+                            if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+                                parameter->setValueNotifyingHost(pluginAutomationValueForSlot(track.pluginAutomationLanes,
+                                                                                              slot.slotIndex,
+                                                                                              parameterIndex,
+                                                                                              track.playheadBeat,
+                                                                                              parameter->getValue()));
+
+                        if (insertIt != track.inserts.end()
+                            && insertIt->kind == ProcessorKind::superColliderFx
+                            && insertIt->hasSuperColliderState)
+                        {
+                            superColliderSendBuffer.makeCopyOf(trackBuffer, true);
+                            const auto inputLevel = bufferPeakLevel(superColliderSendBuffer);
+                            slot.instance->processBlock(superColliderSendBuffer, pluginMidi);
+
+                            const auto wetMix = juce::jlimit(0.0f, 1.0f, insertIt->wetMix);
+                            const auto dryMix = 1.0f - wetMix;
+                            const auto trimGain = juce::Decibels::decibelsToGain(insertIt->outputTrimDb);
+                            superColliderSendBuffer.applyGain(trimGain);
+                            const auto outputLevel = bufferPeakLevel(superColliderSendBuffer);
+
+                            trackBuffer.applyGain(dryMix);
+                            for (int channel = 0; channel < juce::jmin(trackBuffer.getNumChannels(), superColliderSendBuffer.getNumChannels()); ++channel)
+                                trackBuffer.addFrom(channel, 0, superColliderSendBuffer, channel, 0, superColliderSendBuffer.getNumSamples(), wetMix);
+
+                            meterUpdates.push_back({ track.trackId, slot.slotIndex, inputLevel, outputLevel, true });
+                        }
+                        else
+                        {
+                            slot.instance->processBlock(trackBuffer, pluginMidi);
+                        }
                     }
                 }
             }
@@ -689,6 +1000,11 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
         juce::FloatVectorOperations::add(left, trackBuffer.getReadPointer(0), buffer.getNumSamples());
         if (right != nullptr)
             juce::FloatVectorOperations::add(right, trackBuffer.getReadPointer(1), buffer.getNumSamples());
+    }
+
+    {
+        const juce::SpinLock::ScopedLockType lock(hostedInsertMeterLock);
+        hostedInsertMeterStates = std::move(meterUpdates);
     }
 }
 
@@ -858,6 +1174,15 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
 
                     if (hostedInstrument != runtimeIt->slots.end())
                     {
+                        const auto& instrumentParameters = hostedInstrument->instance->getParameters();
+                        for (int parameterIndex = 0; parameterIndex < static_cast<int>(instrumentParameters.size()); ++parameterIndex)
+                            if (auto* parameter = instrumentParameters[static_cast<size_t>(parameterIndex)])
+                                parameter->setValueNotifyingHost(pluginAutomationValueForSlot(track.pluginAutomationLanes,
+                                                                                              hostedInstrument->slotIndex,
+                                                                                              parameterIndex,
+                                                                                              track.playheadBeat,
+                                                                                              parameter->getValue()));
+
                         hostedInstrument->instance->processBlock(trackBuffer, trackMidi);
                         trackMidi.clear();
 
@@ -865,6 +1190,15 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
                         {
                             if (slot.bypassed || slot.instance == nullptr || slot.isInstrument)
                                 continue;
+
+                            const auto& parameters = slot.instance->getParameters();
+                            for (int parameterIndex = 0; parameterIndex < static_cast<int>(parameters.size()); ++parameterIndex)
+                                if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+                                    parameter->setValueNotifyingHost(pluginAutomationValueForSlot(track.pluginAutomationLanes,
+                                                                                                  slot.slotIndex,
+                                                                                                  parameterIndex,
+                                                                                                  track.playheadBeat,
+                                                                                                  parameter->getValue()));
 
                             slot.instance->processBlock(trackBuffer, trackMidi);
                         }

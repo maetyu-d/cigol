@@ -24,6 +24,30 @@ public:
         bool isInstrument { false };
     };
 
+    struct HostedInsertMeterState
+    {
+        int trackId { -1 };
+        int slotIndex { -1 };
+        float inputLevel { 0.0f };
+        float outputLevel { 0.0f };
+        bool active { false };
+    };
+
+    struct AutomatableParameterChoice
+    {
+        int slotIndex { -1 };
+        int parameterIndex { -1 };
+        juce::String name;
+        float currentNormalisedValue { 0.0f };
+    };
+
+    struct PluginParameterBindingStatus
+    {
+        bool slotAvailable { false };
+        bool parameterAvailable { false };
+        juce::String resolvedName;
+    };
+
     AudioEngine(SessionState& sessionToUse, SuperColliderBridge& bridgeToUse);
     ~AudioEngine() override;
 
@@ -39,9 +63,17 @@ public:
     juce::String getEngineSummary() const;
     juce::String getPluginHostingSummary() const;
     std::vector<LoadablePluginChoice> getAvailablePluginChoices(const TrackState& track, int slotIndex);
+    std::vector<AutomatableParameterChoice> getAutomatableParameters(int trackId) const;
+    PluginParameterBindingStatus getTrackPluginParameterBindingStatus(int trackId, int slotIndex, int parameterIndex) const;
+    float getTrackPluginParameterValue(int trackId, int slotIndex, int parameterIndex) const;
+    bool setTrackPluginParameterValue(int trackId, int slotIndex, int parameterIndex, float normalisedValue);
+    std::optional<HostedInsertMeterState> getHostedInsertMeterState(int trackId, int slotIndex) const;
+    bool setTrackSlotBypassed(int trackId, int slotIndex, bool bypassed);
+    bool setTrackSuperColliderInsertMix(int trackId, int slotIndex, float wetMix, float outputTrimDb);
     bool setTrackSlotPlugin(int trackId, int slotIndex, const juce::String& pluginIdentifier);
     void clearTrackSlotPlugin(int trackId, int slotIndex);
     std::unique_ptr<juce::AudioProcessorEditor> createTrackSlotEditor(int trackId, int slotIndex);
+    void syncPluginStatesToSession();
     void reloadSessionState();
 
     struct AudioClipData
@@ -53,6 +85,16 @@ public:
 
     struct TrackPlaybackState
     {
+        struct InsertPlaybackState
+        {
+            int slotIndex { -1 };
+            ProcessorKind kind { ProcessorKind::audioUnit };
+            bool bypassed { false };
+            bool hasSuperColliderState { false };
+            float wetMix { 1.0f };
+            float outputTrimDb { 0.0f };
+        };
+
         struct RegionPlaybackState
         {
             struct MidiNotePlaybackState
@@ -87,6 +129,9 @@ public:
         float pan { 0.0f };
         std::vector<AutomationPoint> volumeAutomation;
         std::vector<AutomationPoint> panAutomation;
+        std::vector<PluginAutomationLane> pluginAutomationLanes;
+        int selectedPluginAutomationLaneIndex { -1 };
+        std::vector<InsertPlaybackState> inserts;
         std::vector<RegionPlaybackState> regions;
     };
 
@@ -132,8 +177,10 @@ private:
     std::vector<HostedTrackRuntime> hostedTrackRuntimes;
     std::map<juce::String, std::shared_ptr<const AudioClipData>> audioClipCache;
     std::map<int, std::set<int>> activeMidiNotesByTrack;
+    std::vector<HostedInsertMeterState> hostedInsertMeterStates;
     juce::SpinLock trackStateLock;
     juce::SpinLock pluginRuntimeLock;
+    juce::SpinLock hostedInsertMeterLock;
     juce::AudioProcessorGraph::NodeID audioInputNodeId {};
     juce::AudioProcessorGraph::NodeID audioOutputNodeId {};
     double currentSampleRate { 44100.0 };

@@ -21,6 +21,15 @@ struct SuperColliderTrackSnapshot
     bool hasMidiGenerator { false };
 };
 
+struct HostedInsertRoutingSnapshot
+{
+    int trackId { -1 };
+    int slotIndex { -1 };
+    float inputLevel { 0.0f };
+    float outputLevel { 0.0f };
+    bool active { false };
+};
+
 struct SynthDefDescriptor
 {
     juce::String name;
@@ -79,6 +88,8 @@ public:
     virtual juce::String getConnectionSummary(const SessionState& session) const = 0;
     virtual juce::String describeTrack(const TrackState& track) const = 0;
     virtual std::vector<SuperColliderTrackSnapshot> createSnapshots(const SessionState& session) const = 0;
+    virtual void updateHostedInsertRouting(const SessionState& session,
+                                           const std::vector<HostedInsertRoutingSnapshot>& snapshots) = 0;
 };
 
 class SuperColliderProcessBridge final : public SuperColliderBridge
@@ -98,6 +109,8 @@ public:
     juce::String getConnectionSummary(const SessionState& session) const override;
     juce::String describeTrack(const TrackState& track) const override;
     std::vector<SuperColliderTrackSnapshot> createSnapshots(const SessionState& session) const override;
+    void updateHostedInsertRouting(const SessionState& session,
+                                   const std::vector<HostedInsertRoutingSnapshot>& snapshots) override;
 
 private:
     bool connectOsc();
@@ -147,6 +160,7 @@ private:
     juce::OSCSender oscSender;
     std::map<int, int> activeRenderNodes;
     std::map<int, int> activeFxNodes;
+    std::map<int, HostedInsertRoutingSnapshot> hostedInsertRouting;
     std::map<int, bool> activeMidiGeneratorTracks;
     std::map<int, int> renderAudioBuses;
     std::map<int, int> fxAudioBuses;

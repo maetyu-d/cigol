@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -36,6 +37,127 @@ String describeRegionKind(const RegionKind kind)
     return "Region";
 }
 
+juce::String defaultTrackNameForKind(TrackKind kind, int ordinal)
+{
+    switch (kind)
+    {
+        case TrackKind::audio: return "Audio " + juce::String(ordinal);
+        case TrackKind::midi: return "MIDI " + juce::String(ordinal);
+        case TrackKind::instrument: return "Instrument " + juce::String(ordinal);
+        case TrackKind::superColliderRender: return "SC Render " + juce::String(ordinal);
+    }
+
+    return "Track " + juce::String(ordinal);
+}
+
+juce::String defaultTrackRoleForKind(TrackKind kind)
+{
+    switch (kind)
+    {
+        case TrackKind::audio: return "Audio Track";
+        case TrackKind::midi: return "MIDI Track";
+        case TrackKind::instrument: return "Instrument Track";
+        case TrackKind::superColliderRender: return "SuperCollider Render";
+    }
+
+    return "Track";
+}
+
+juce::Colour defaultTrackColourForKind(TrackKind kind, int ordinal)
+{
+    static const std::array<juce::Colour, 4> audioColours {
+        juce::Colour::fromRGB(236, 94, 90),
+        juce::Colour::fromRGB(255, 133, 92),
+        juce::Colour::fromRGB(255, 164, 95),
+        juce::Colour::fromRGB(210, 92, 86)
+    };
+    static const std::array<juce::Colour, 4> midiColours {
+        juce::Colour::fromRGB(247, 184, 68),
+        juce::Colour::fromRGB(230, 196, 88),
+        juce::Colour::fromRGB(212, 166, 57),
+        juce::Colour::fromRGB(240, 150, 60)
+    };
+    static const std::array<juce::Colour, 4> instrumentColours {
+        juce::Colour::fromRGB(67, 183, 148),
+        juce::Colour::fromRGB(87, 208, 164),
+        juce::Colour::fromRGB(60, 156, 128),
+        juce::Colour::fromRGB(78, 194, 181)
+    };
+    static const std::array<juce::Colour, 4> scColours {
+        juce::Colour::fromRGB(84, 155, 255),
+        juce::Colour::fromRGB(112, 142, 255),
+        juce::Colour::fromRGB(104, 132, 232),
+        juce::Colour::fromRGB(127, 118, 255)
+    };
+
+    const auto index = static_cast<size_t>(juce::jmax(0, ordinal - 1)) % audioColours.size();
+    switch (kind)
+    {
+        case TrackKind::audio: return audioColours[index];
+        case TrackKind::midi: return midiColours[index];
+        case TrackKind::instrument: return instrumentColours[index];
+        case TrackKind::superColliderRender: return scColours[index];
+    }
+
+    return juce::Colours::darkgrey;
+}
+
+TrackState makeDefaultTrack(TrackKind kind, int id, int ordinal)
+{
+    TrackState track;
+    track.id = id;
+    track.name = defaultTrackNameForKind(kind, ordinal);
+    track.role = defaultTrackRoleForKind(kind);
+    track.kind = kind;
+    track.colour = defaultTrackColourForKind(kind, ordinal);
+    track.mixer = { 0.78f, 0.0f, 0.0f };
+    track.visibleAutomationLane = AutomationLaneMode::volume;
+    track.automationExpanded = false;
+    track.automationWriteMode = AutomationWriteMode::read;
+    track.automationWriteTarget = AutomationLaneMode::none;
+    track.automationGestureActive = false;
+    track.automationLatchActive = false;
+
+    if (kind == TrackKind::audio)
+    {
+        track.regions.push_back({ "Audio Clip", track.colour, RegionKind::audio, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+    }
+    else if (kind == TrackKind::midi)
+    {
+        Region region { "MIDI Clip", track.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} };
+        region.midiNotes = {
+            { 60, 0.0, 1.0, 100, false },
+            { 64, 1.0, 1.0, 100, false },
+            { 67, 2.0, 1.0, 100, false }
+        };
+        track.regions.push_back(region);
+    }
+    else if (kind == TrackKind::instrument)
+    {
+        Region region { "Instrument Clip", track.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} };
+        region.midiNotes = {
+            { 48, 0.0, 2.0, 108, false },
+            { 55, 0.0, 2.0, 102, false },
+            { 60, 2.0, 2.0, 110, false }
+        };
+        track.regions.push_back(region);
+    }
+    else if (kind == TrackKind::superColliderRender)
+    {
+        track.regions.push_back({ "Generated", track.colour, RegionKind::generated, 1.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+        track.renderScript = SuperColliderScriptState { "Scene Render",
+                                                        "SinOsc.ar(220 ! 2) * 0.15",
+                                                        "default",
+                                                        "SynthDef(\\\\default)",
+                                                        "Render -> SC Render Bus A",
+                                                        "Ready",
+                                                        true,
+                                                        false };
+    }
+
+    return track;
+}
+
 String shortenForSidebar(const String& text, const int maxCharacters)
 {
     if (text.length() <= maxCharacters || maxCharacters < 8)
@@ -44,6 +166,40 @@ String shortenForSidebar(const String& text, const int maxCharacters)
     const auto headLength = maxCharacters / 2;
     const auto tailLength = maxCharacters - headLength - 3;
     return text.substring(0, headLength) + "..." + text.substring(text.length() - tailLength);
+}
+
+std::optional<double> readAudioFileDurationSeconds(const juce::File& file)
+{
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+    if (reader == nullptr || reader->sampleRate <= 0.0)
+        return std::nullopt;
+
+    return static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
+}
+
+int lowerPaneModeToStoredValue(MainComponent::LowerPaneMode mode)
+{
+    switch (mode)
+    {
+        case MainComponent::LowerPaneMode::editor: return 0;
+        case MainComponent::LowerPaneMode::mixer: return 1;
+        case MainComponent::LowerPaneMode::split: return 2;
+    }
+
+    return 0;
+}
+
+MainComponent::LowerPaneMode storedValueToLowerPaneMode(int value)
+{
+    switch (value)
+    {
+        case 1: return MainComponent::LowerPaneMode::mixer;
+        case 2: return MainComponent::LowerPaneMode::split;
+        default: return MainComponent::LowerPaneMode::editor;
+    }
 }
 
 float interpolateAutomationDisplayValue(const std::vector<AutomationPoint>& points, const double beat, const float fallback)
@@ -114,6 +270,63 @@ public:
 private:
     float level { 0.0f };
 };
+
+class InsertRouteMeterComponent final : public Component
+{
+public:
+    void setLevels(float newInputLevel, float newOutputLevel, bool newActive)
+    {
+        inputLevel = jlimit(0.0f, 1.0f, newInputLevel);
+        outputLevel = jlimit(0.0f, 1.0f, newOutputLevel);
+        active = newActive;
+        repaint();
+    }
+
+    void paint(Graphics& g) override
+    {
+        auto area = getLocalBounds().toFloat();
+        g.setColour(Colours::black.withAlpha(0.18f));
+        g.fillRoundedRectangle(area, 5.0f);
+        g.setColour(Colours::white.withAlpha(active ? 0.12f : 0.05f));
+        g.drawRoundedRectangle(area.reduced(0.5f), 5.0f, 1.0f);
+
+        auto content = area.reduced(4.0f, 3.0f);
+        const auto labelWidth = 10.0f;
+        const auto gap = 2.0f;
+        const auto rowHeight = (content.getHeight() - gap) * 0.5f;
+        const auto meterActive = active;
+
+        auto drawRow = [&g, labelWidth, meterActive] (Rectangle<float> rowArea, const String& text, float level)
+        {
+            auto labelArea = rowArea.removeFromLeft(labelWidth);
+            g.setColour(Colours::white.withAlpha(meterActive ? 0.62f : 0.24f));
+            g.setFont(FontOptions(8.0f, Font::bold));
+            g.drawText(text, labelArea.toNearestInt(), Justification::centredLeft, false);
+
+            g.setColour(Colours::white.withAlpha(meterActive ? 0.08f : 0.04f));
+            g.fillRoundedRectangle(rowArea, 2.5f);
+
+            if (level > 0.0f)
+            {
+                auto fill = rowArea.withWidth(rowArea.getWidth() * level);
+                ColourGradient gradient(Colour::fromRGB(79, 211, 164), fill.getBottomLeft(),
+                                        Colour::fromRGB(255, 152, 71), fill.getTopRight(), false);
+                g.setGradientFill(gradient);
+                g.fillRoundedRectangle(fill, 2.5f);
+            }
+        };
+
+        auto topRow = content.removeFromTop(rowHeight);
+        drawRow(topRow, "I", inputLevel);
+        content.removeFromTop(gap);
+        drawRow(content, "O", outputLevel);
+    }
+
+private:
+    float inputLevel { 0.0f };
+    float outputLevel { 0.0f };
+    bool active { false };
+};
 } // namespace
 
 class MainComponent::TransportComponent final : public Component,
@@ -125,13 +338,17 @@ public:
                        std::function<void()> onUndoToUse,
                        std::function<void()> onRedoToUse,
                        std::function<void()> onSaveToUse,
-                       std::function<void()> onLoadToUse)
+                       std::function<void()> onLoadToUse,
+                       std::function<void()> onAddTrackToUse,
+                       std::function<void()> onRemoveTrackToUse)
         : state(stateToUse),
           engine(engineToUse),
           onUndo(std::move(onUndoToUse)),
           onRedo(std::move(onRedoToUse)),
           onSave(std::move(onSaveToUse)),
-          onLoad(std::move(onLoadToUse))
+          onLoad(std::move(onLoadToUse)),
+          onAddTrack(std::move(onAddTrackToUse)),
+          onRemoveTrack(std::move(onRemoveTrackToUse))
     {
         addAndMakeVisible(titleLabel);
         titleLabel.setText("LogicLikeDAW", dontSendNotification);
@@ -162,6 +379,8 @@ public:
         configureButton(redoButton, "Redo", [this] { if (onRedo != nullptr) onRedo(); });
         configureButton(saveButton, "Save", [this] { if (onSave != nullptr) onSave(); });
         configureButton(loadButton, "Load", [this] { if (onLoad != nullptr) onLoad(); });
+        configureButton(addTrackButton, "+ Track", [this] { if (onAddTrack != nullptr) onAddTrack(); });
+        configureButton(removeTrackButton, "- Track", [this] { if (onRemoveTrack != nullptr) onRemoveTrack(); });
 
         addAndMakeVisible(tempoSlider);
         tempoSlider.setRange(60.0, 180.0, 1.0);
@@ -188,11 +407,13 @@ public:
         projectLabel.setBounds(left.removeFromTop(20));
         statusLabel.setBounds(left);
 
-        auto utilityButtons = area.removeFromLeft(280);
+        auto utilityButtons = area.removeFromLeft(428);
         undoButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         redoButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         saveButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         loadButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
+        addTrackButton.setBounds(utilityButtons.removeFromLeft(82).reduced(4));
+        removeTrackButton.setBounds(utilityButtons.removeFromLeft(82).reduced(4));
 
         auto buttons = area.removeFromLeft(268);
         backButton.setBounds(buttons.removeFromLeft(48).reduced(4));
@@ -204,11 +425,12 @@ public:
         positionLabel.setBounds(area.removeFromRight(190));
     }
 
-    void setProjectStatus(const String& projectName, const bool dirty, const bool canUndo, const bool canRedo)
+    void setProjectStatus(const String& projectName, const bool dirty, const bool canUndo, const bool canRedo, const bool canRemoveTrack)
     {
         projectLabel.setText((dirty ? "* " : "") + projectName, dontSendNotification);
         undoButton.setEnabled(canUndo);
         redoButton.setEnabled(canRedo);
+        removeTrackButton.setEnabled(canRemoveTrack);
     }
 
 private:
@@ -245,6 +467,8 @@ private:
     std::function<void()> onRedo;
     std::function<void()> onSave;
     std::function<void()> onLoad;
+    std::function<void()> onAddTrack;
+    std::function<void()> onRemoveTrack;
     Label titleLabel;
     Label statusLabel;
     Label projectLabel;
@@ -253,6 +477,8 @@ private:
     TextButton redoButton;
     TextButton saveButton;
     TextButton loadButton;
+    TextButton addTrackButton;
+    TextButton removeTrackButton;
     TextButton backButton;
     TextButton playButton;
     TextButton stopButton;
@@ -376,7 +602,8 @@ private:
     void updateAutomationButton()
     {
         auto icon = track.automationExpanded ? "v" : ">";
-        auto lane = track.visibleAutomationLane == AutomationLaneMode::pan ? "P" : "A";
+        auto lane = track.visibleAutomationLane == AutomationLaneMode::pan ? "P"
+            : (track.visibleAutomationLane == AutomationLaneMode::plugin ? "Fx" : "A");
         automationButton.setButtonText(juce::String(icon) + lane);
         automationButton.setColour(TextButton::buttonColourId,
                                    track.automationExpanded ? track.colour.withAlpha(0.35f) : Colour::fromRGB(54, 60, 74));
@@ -388,22 +615,35 @@ class MainComponent::ArrangeViewComponent final : public Component
 {
 public:
     ArrangeViewComponent(SessionState& sessionToUse,
+                         int initialHeaderWidth,
                          std::function<void(int)> onTrackSelectToUse,
                          std::function<void(int, int)> onRegionSelectToUse,
                          std::function<void()> onRegionEditToUse,
                          std::function<void()> onAutomationLayoutChangeToUse,
-                         std::function<void()> onTrackEditToUse)
+                         std::function<void()> onTrackEditToUse,
+                         std::function<void(int)> onHeaderWidthChangedToUse)
         : session(sessionToUse),
+          headerWidth(juce::jlimit(minimumHeaderWidth, maximumHeaderWidth, initialHeaderWidth)),
           onTrackSelect(std::move(onTrackSelectToUse)),
           onRegionSelect(std::move(onRegionSelectToUse)),
           onRegionEdit(std::move(onRegionEditToUse)),
           onAutomationLayoutChange(std::move(onAutomationLayoutChangeToUse)),
           onTrackEdit(std::move(onTrackEditToUse)),
+          onHeaderWidthChanged(std::move(onHeaderWidthChangedToUse)),
           thumbnailCache(24)
     {
         audioFormatManager.registerBasicFormats();
         setWantsKeyboardFocus(true);
         rebuildTrackHeaders();
+    }
+
+    void setHeaderWidth(int newWidth)
+    {
+        headerWidth = juce::jlimit(minimumHeaderWidth, maximumHeaderWidth, newWidth);
+        if (onHeaderWidthChanged != nullptr)
+            onHeaderWidthChanged(headerWidth);
+        resized();
+        repaint();
     }
 
     void refreshTracks()
@@ -442,9 +682,30 @@ public:
                 g.setColour(Colours::white.withAlpha(0.05f));
                 g.drawLine(static_cast<float>(automationRow.getX()), static_cast<float>(automationRow.getY()),
                            static_cast<float>(automationRow.getRight()), static_cast<float>(automationRow.getY()));
-                paintAutomationLane(g, automationRow, track);
+
+                for (int laneIndex = 0; laneIndex < automationLaneRowCount(track); ++laneIndex)
+                {
+                    auto laneRow = automationLaneBounds(i, laneIndex);
+                    if (laneIndex > 0)
+                    {
+                        g.setColour(Colours::white.withAlpha(0.04f));
+                        g.drawLine(static_cast<float>(laneRow.getX()), static_cast<float>(laneRow.getY()),
+                                   static_cast<float>(laneRow.getRight()), static_cast<float>(laneRow.getY()));
+                    }
+
+                    paintAutomationLane(g, laneRow, track, laneIndex);
+                }
             }
         }
+
+        g.setColour(Colours::white.withAlpha(0.10f));
+        g.fillRect(headerWidth - 1, timelineHeight, 2, getHeight() - timelineHeight);
+        g.setColour(Colours::white.withAlpha(0.24f));
+        g.fillRoundedRectangle(Rectangle<float>(static_cast<float>(headerWidth - 2),
+                                                static_cast<float>(timelineHeight + 16),
+                                                4.0f,
+                                                64.0f),
+                               2.0f);
 
         paintPlayhead(g, gridArea);
     }
@@ -457,6 +718,12 @@ public:
 
     void mouseUp(const MouseEvent& event) override
     {
+        if (draggingHeaderSplitter)
+        {
+            draggingHeaderSplitter = false;
+            return;
+        }
+
         if (dragState.active)
         {
             dragState = {};
@@ -483,6 +750,8 @@ public:
 
         if (automationRow.contains(event.getPosition()))
         {
+            if (track.visibleAutomationLane == AutomationLaneMode::plugin)
+                track.selectedPluginAutomationLaneIndex = automationLaneIndexAtY(track, event.y);
             if (onTrackSelect != nullptr)
                 onTrackSelect(track.id);
             return;
@@ -497,6 +766,13 @@ public:
         dragState = {};
         grabKeyboardFocus();
 
+        if (std::abs(event.x - headerWidth) <= 6)
+        {
+            draggingHeaderSplitter = true;
+            headerWidthAtDragStart = headerWidth;
+            return;
+        }
+
         if (const auto automationHit = hitTestAutomationPoint(event.getPosition()); automationHit.trackId >= 0)
         {
             if (onTrackSelect != nullptr)
@@ -504,16 +780,21 @@ public:
 
             selectedAutomationTrackId = automationHit.trackId;
             selectedAutomationPointIndex = automationHit.pointIndex;
+            selectedAutomationLaneIndex = automationHit.laneIndex;
 
             dragState.active = true;
             dragState.mode = DragMode::automationPoint;
             dragState.trackId = automationHit.trackId;
             dragState.automationPointIndex = automationHit.pointIndex;
+            dragState.automationLaneIndex = automationHit.laneIndex;
             dragState.dragStartPoint = event.getPosition();
 
             if (auto* track = getTrackById(automationHit.trackId))
             {
-                const auto& point = getAutomationPoints(*track)[static_cast<size_t>(automationHit.pointIndex)];
+                if (track->visibleAutomationLane == AutomationLaneMode::plugin)
+                    track->selectedPluginAutomationLaneIndex = automationHit.laneIndex;
+
+                const auto& point = getAutomationPoints(*track, automationHit.laneIndex)[static_cast<size_t>(automationHit.pointIndex)];
                 dragState.originalAutomationBeat = point.beat;
                 dragState.originalAutomationValue = point.value;
             }
@@ -525,6 +806,7 @@ public:
         {
             selectedAutomationTrackId = -1;
             selectedAutomationPointIndex = -1;
+            selectedAutomationLaneIndex = 0;
             if (onRegionSelect != nullptr)
                 onRegionSelect(target.trackId, target.regionIndex);
 
@@ -551,6 +833,12 @@ public:
 
     void mouseDoubleClick(const MouseEvent& event) override
     {
+        if (std::abs(event.x - headerWidth) <= 6)
+        {
+            setHeaderWidth(headerWidth <= collapsedHeaderWidth ? 240 : collapsedHeaderWidth);
+            return;
+        }
+
         if (event.x < headerWidth || event.y < timelineHeight)
             return;
 
@@ -558,13 +846,17 @@ public:
         {
             if (auto* track = getTrackById(automationHit.trackId))
             {
-                auto& points = getAutomationPoints(*track);
+                if (track->visibleAutomationLane == AutomationLaneMode::plugin)
+                    track->selectedPluginAutomationLaneIndex = automationHit.laneIndex;
+
+                auto& points = getAutomationPoints(*track, automationHit.laneIndex);
                 if (automationHit.pointIndex >= 0 && automationHit.pointIndex < static_cast<int>(points.size()) - 1)
                 {
                     auto& point = points[static_cast<size_t>(automationHit.pointIndex)];
                     point.shapeToNext = nextSegmentShape(point.shapeToNext);
                     selectedAutomationTrackId = automationHit.trackId;
                     selectedAutomationPointIndex = automationHit.pointIndex;
+                    selectedAutomationLaneIndex = automationHit.laneIndex;
 
                     if (onRegionEdit != nullptr)
                         onRegionEdit();
@@ -589,14 +881,17 @@ public:
             onTrackSelect(track.id);
 
         selectedAutomationTrackId = track.id;
+        selectedAutomationLaneIndex = automationLaneIndexAtY(track, event.y);
+        if (track.visibleAutomationLane == AutomationLaneMode::plugin)
+            track.selectedPluginAutomationLaneIndex = selectedAutomationLaneIndex;
 
         AutomationPoint point;
         point.beat = juce::jlimit(1.0, session.transport.visibleBeats, xPositionToBeat(event.x));
-        point.value = yPositionToAutomationValue(automationRow, event.y, track.visibleAutomationLane);
-        auto& points = getAutomationPoints(track);
+        point.value = yPositionToAutomationValue(automationLaneBounds(trackRow, selectedAutomationLaneIndex), event.y, track.visibleAutomationLane);
+        auto& points = getAutomationPoints(track, selectedAutomationLaneIndex);
         points.push_back(point);
         sortAutomation(points);
-        selectedAutomationPointIndex = indexOfAutomationPoint(track, point.beat, point.value);
+        selectedAutomationPointIndex = indexOfAutomationPoint(track, point.beat, point.value, selectedAutomationLaneIndex);
 
         if (onRegionEdit != nullptr)
             onRegionEdit();
@@ -606,6 +901,16 @@ public:
 
     void mouseDrag(const MouseEvent& event) override
     {
+        if (draggingHeaderSplitter)
+        {
+            auto proposedWidth = headerWidthAtDragStart + event.getDistanceFromDragStartX();
+            if (proposedWidth < 72)
+                proposedWidth = collapsedHeaderWidth;
+
+            setHeaderWidth(proposedWidth);
+            return;
+        }
+
         if (! dragState.active)
             return;
 
@@ -613,20 +918,24 @@ public:
         {
             if (auto* track = getTrackById(dragState.trackId))
             {
-                auto& points = getAutomationPoints(*track);
+                auto& points = getAutomationPoints(*track, dragState.automationLaneIndex);
                 if (dragState.automationPointIndex >= 0
                     && dragState.automationPointIndex < static_cast<int>(points.size()))
                 {
                     const auto trackRow = trackRowForId(dragState.trackId);
                     if (trackRow >= 0)
                     {
+                        if (track->visibleAutomationLane == AutomationLaneMode::plugin)
+                            track->selectedPluginAutomationLaneIndex = dragState.automationLaneIndex;
                         auto& draggedPoint = points[static_cast<size_t>(dragState.automationPointIndex)];
                         draggedPoint.beat = juce::jlimit(1.0, session.transport.visibleBeats,
                                                          dragState.originalAutomationBeat + snapBeatDelta(xDeltaToBeatDelta(event.getDistanceFromDragStartX())));
-                        draggedPoint.value = juce::jlimit(automationMinimumValue(*track), automationMaximumValue(*track),
-                                                          dragState.originalAutomationValue - static_cast<float>(event.getDistanceFromDragStartY()) / static_cast<float>(automationLaneHeight - 12));
+                        draggedPoint.value = yPositionToAutomationValue(automationLaneBounds(trackRow, dragState.automationLaneIndex),
+                                                                        event.y,
+                                                                        track->visibleAutomationLane);
                         sortAutomation(points);
-                        selectedAutomationPointIndex = nearestAutomationPointIndex(*track, draggedPoint.beat, draggedPoint.value);
+                        selectedAutomationPointIndex = nearestAutomationPointIndex(*track, draggedPoint.beat, draggedPoint.value, dragState.automationLaneIndex);
+                        selectedAutomationLaneIndex = dragState.automationLaneIndex;
                     }
                 }
             }
@@ -693,7 +1002,7 @@ public:
         {
             if (auto* track = getTrackById(selectedAutomationTrackId))
             {
-                auto& points = getAutomationPoints(*track);
+                auto& points = getAutomationPoints(*track, selectedAutomationLaneIndex);
                 if (selectedAutomationPointIndex < static_cast<int>(points.size()))
                 {
                     points.erase(points.begin() + selectedAutomationPointIndex);
@@ -711,8 +1020,18 @@ public:
         return false;
     }
 
+    void mouseMove(const MouseEvent& event) override
+    {
+        if (std::abs(event.x - headerWidth) <= 6)
+            setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+        else
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
 private:
-    static constexpr int headerWidth = 240;
+    static constexpr int minimumHeaderWidth = 44;
+    static constexpr int maximumHeaderWidth = 420;
+    static constexpr int collapsedHeaderWidth = 44;
     static constexpr int timelineHeight = 34;
     static constexpr int regionLaneHeight = 82;
     static constexpr int automationLaneHeight = 38;
@@ -745,6 +1064,7 @@ private:
     {
         int trackId { -1 };
         int pointIndex { -1 };
+        int laneIndex { 0 };
     };
 
     struct DragState
@@ -755,6 +1075,7 @@ private:
         int trackId { -1 };
         int regionIndex { -1 };
         int automationPointIndex { -1 };
+        int automationLaneIndex { 0 };
         Point<int> dragStartPoint;
         double originalStartBeat { 0.0 };
         double originalLengthInBeats { 0.0 };
@@ -764,6 +1085,10 @@ private:
         double originalAutomationBeat { 1.0 };
         float originalAutomationValue { 1.0f };
     };
+
+    int headerWidth { 240 };
+    bool draggingHeaderSplitter { false };
+    int headerWidthAtDragStart { 240 };
 
     void rebuildTrackHeaders()
     {
@@ -828,19 +1153,20 @@ private:
         }
     }
 
-    void paintAutomationLane(Graphics& g, Rectangle<int> row, const TrackState& track)
+    void paintAutomationLane(Graphics& g, Rectangle<int> row, const TrackState& track, int laneIndex)
     {
+        const auto laneMode = track.visibleAutomationLane;
+        const auto baselineValue = laneMode == AutomationLaneMode::pan ? track.mixer.pan
+            : (laneMode == AutomationLaneMode::plugin ? 0.5f : track.mixer.volume);
         g.setColour(track.selected ? track.colour.withAlpha(0.20f) : Colours::white.withAlpha(0.06f));
-        const auto baseline = yForAutomationValue(row,
-                                                  track.visibleAutomationLane == AutomationLaneMode::pan ? track.mixer.pan : track.mixer.volume,
-                                                  track.visibleAutomationLane);
+        const auto baseline = yForAutomationValue(row, baselineValue, laneMode);
         g.drawLine(static_cast<float>(row.getX() + 6), baseline,
                    static_cast<float>(row.getRight() - 6), baseline, 1.0f);
 
-        auto points = getAutomationPointsCopy(track);
+        auto points = getAutomationPointsCopy(track, laneIndex);
 
         if (points.empty())
-            points.push_back({ 1.0, track.visibleAutomationLane == AutomationLaneMode::pan ? track.mixer.pan : track.mixer.volume });
+            points.push_back({ 1.0, baselineValue });
 
         g.setColour(track.colour.withAlpha(track.selected ? 0.95f : 0.70f));
         juce::Path automationPath;
@@ -848,7 +1174,7 @@ private:
         for (size_t i = 0; i < points.size(); ++i)
         {
             const auto x = xForBeat(points[i].beat);
-            const auto y = yForAutomationValue(row, points[i].value, track.visibleAutomationLane);
+            const auto y = yForAutomationValue(row, points[i].value, laneMode);
 
             if (i == 0)
                 automationPath.startNewSubPath(x, y);
@@ -856,13 +1182,13 @@ private:
             if (i + 1 < points.size())
             {
                 const auto& next = points[i + 1];
-                appendAutomationSegment(automationPath, row, points[i], next, track.visibleAutomationLane);
+                appendAutomationSegment(automationPath, row, points[i], next, laneMode);
 
                 if (track.selected)
                 {
                     const auto segmentMidX = xForBeat((points[i].beat + next.beat) * 0.5);
                     const auto segmentMidValue = interpolateAutomationDisplayValue({ points[i], next }, (points[i].beat + next.beat) * 0.5, points[i].value);
-                    const auto segmentMidY = yForAutomationValue(row, segmentMidValue, track.visibleAutomationLane);
+                    const auto segmentMidY = yForAutomationValue(row, segmentMidValue, laneMode);
                     g.setColour(Colours::white.withAlpha(0.38f));
                     g.drawText(shapeShortLabel(points[i].shapeToNext),
                                juce::Rectangle<int>(static_cast<int>(segmentMidX) - 18, static_cast<int>(segmentMidY) - 18, 36, 12),
@@ -871,7 +1197,9 @@ private:
                 }
             }
 
-            const auto pointSelected = track.id == selectedAutomationTrackId && static_cast<int>(i) == selectedAutomationPointIndex;
+            const auto pointSelected = track.id == selectedAutomationTrackId
+                && laneIndex == selectedAutomationLaneIndex
+                && static_cast<int>(i) == selectedAutomationPointIndex;
             g.fillEllipse(x - 4.0f, y - 4.0f, 8.0f, 8.0f);
             if (pointSelected)
             {
@@ -892,7 +1220,18 @@ private:
 
         g.strokePath(automationPath, juce::PathStrokeType(2.0f));
         g.setColour(Colours::white.withAlpha(0.46f));
-        g.drawText(toDisplayString(track.visibleAutomationLane) + " automation", row.removeFromLeft(150).reduced(8, 4), Justification::centredLeft, false);
+        juce::String laneLabel = toDisplayString(laneMode) + " automation";
+        if (laneMode == AutomationLaneMode::plugin
+            && laneIndex >= 0
+            && laneIndex < static_cast<int>(track.pluginAutomationLanes.size()))
+        {
+            const auto& lane = track.pluginAutomationLanes[static_cast<size_t>(laneIndex)];
+            laneLabel = lane.displayName.isNotEmpty()
+                ? lane.displayName
+                : "S" + juce::String(lane.slotIndex + 1) + " / " + lane.parameterName;
+            laneLabel = shortenForSidebar(laneLabel, 26);
+        }
+        g.drawText(laneLabel, row.removeFromLeft(170).reduced(8, 4), Justification::centredLeft, false);
     }
 
     void paintTrackRegions(Graphics& g, Rectangle<int> row, const TrackState& track)
@@ -1093,7 +1432,18 @@ private:
 
     int trackAutomationHeight(const TrackState& track) const
     {
-        return (track.visibleAutomationLane == AutomationLaneMode::none || ! track.automationExpanded) ? 0 : automationLaneHeight;
+        return automationLaneRowCount(track) * automationLaneHeight;
+    }
+
+    int automationLaneRowCount(const TrackState& track) const
+    {
+        if (track.visibleAutomationLane == AutomationLaneMode::none || ! track.automationExpanded)
+            return 0;
+
+        if (track.visibleAutomationLane == AutomationLaneMode::plugin)
+            return juce::jmax(1, static_cast<int>(track.pluginAutomationLanes.size()));
+
+        return 1;
     }
 
     int trackTopForRow(int trackRow) const
@@ -1122,6 +1472,33 @@ private:
         auto row = trackRowBounds(trackRow);
         row.removeFromTop(regionLaneHeight);
         return row;
+    }
+
+    Rectangle<int> automationLaneBounds(int trackRow, int laneIndex) const
+    {
+        auto row = trackAutomationBounds(trackRow);
+        const auto laneCount = automationLaneRowCount(session.tracks[static_cast<size_t>(trackRow)]);
+        if (laneCount <= 0)
+            return {};
+
+        laneIndex = juce::jlimit(0, laneCount - 1, laneIndex);
+        row.removeFromTop(laneIndex * automationLaneHeight);
+        return row.removeFromTop(automationLaneHeight);
+    }
+
+    int automationLaneIndexAtY(const TrackState& track, int y) const
+    {
+        if (track.visibleAutomationLane != AutomationLaneMode::plugin)
+            return 0;
+
+        const auto trackRow = trackRowForId(track.id);
+        if (trackRow < 0)
+            return 0;
+
+        const auto area = trackAutomationBounds(trackRow);
+        return juce::jlimit(0,
+                            juce::jmax(0, automationLaneRowCount(track) - 1),
+                            (y - area.getY()) / juce::jmax(1, automationLaneHeight));
     }
 
     float xForBeat(double beat) const
@@ -1218,15 +1595,17 @@ private:
         if (! automationRow.contains(point))
             return {};
 
-        const auto& points = getAutomationPoints(track);
+        const auto laneIndex = automationLaneIndexAtY(track, point.y);
+        const auto laneRow = automationLaneBounds(trackRow, laneIndex);
+        const auto& points = getAutomationPoints(track, laneIndex);
         for (size_t i = 0; i < points.size(); ++i)
         {
             const auto pointX = xForBeat(points[i].beat);
-            const auto pointY = yForAutomationValue(automationRow, points[i].value, track.visibleAutomationLane);
+            const auto pointY = yForAutomationValue(laneRow, points[i].value, track.visibleAutomationLane);
             juce::Rectangle<float> pointBounds(pointX - 7.0f, pointY - 7.0f, 14.0f, 14.0f);
 
             if (pointBounds.contains(static_cast<float>(point.x), static_cast<float>(point.y)))
-                return { track.id, static_cast<int>(i) };
+                return { track.id, static_cast<int>(i), laneIndex };
         }
 
         return {};
@@ -1305,17 +1684,54 @@ private:
 
     std::vector<AutomationPoint>& getAutomationPoints(TrackState& track)
     {
-        return track.visibleAutomationLane == AutomationLaneMode::pan ? track.panAutomation : track.volumeAutomation;
+        const auto laneIndex = track.visibleAutomationLane == AutomationLaneMode::plugin ? track.selectedPluginAutomationLaneIndex : 0;
+        return getAutomationPoints(track, laneIndex);
+    }
+
+    std::vector<AutomationPoint>& getAutomationPoints(TrackState& track, int laneIndex)
+    {
+        if (track.visibleAutomationLane == AutomationLaneMode::pan)
+            return track.panAutomation;
+        if (track.visibleAutomationLane == AutomationLaneMode::plugin)
+        {
+            static std::vector<AutomationPoint> emptyPoints;
+            if (laneIndex >= 0
+                && laneIndex < static_cast<int>(track.pluginAutomationLanes.size()))
+                return track.pluginAutomationLanes[static_cast<size_t>(laneIndex)].points;
+            return emptyPoints;
+        }
+        return track.volumeAutomation;
     }
 
     const std::vector<AutomationPoint>& getAutomationPoints(const TrackState& track) const
     {
-        return track.visibleAutomationLane == AutomationLaneMode::pan ? track.panAutomation : track.volumeAutomation;
+        const auto laneIndex = track.visibleAutomationLane == AutomationLaneMode::plugin ? track.selectedPluginAutomationLaneIndex : 0;
+        return getAutomationPoints(track, laneIndex);
+    }
+
+    const std::vector<AutomationPoint>& getAutomationPoints(const TrackState& track, int laneIndex) const
+    {
+        if (track.visibleAutomationLane == AutomationLaneMode::pan)
+            return track.panAutomation;
+        if (track.visibleAutomationLane == AutomationLaneMode::plugin)
+        {
+            static const std::vector<AutomationPoint> emptyPoints;
+            if (laneIndex >= 0
+                && laneIndex < static_cast<int>(track.pluginAutomationLanes.size()))
+                return track.pluginAutomationLanes[static_cast<size_t>(laneIndex)].points;
+            return emptyPoints;
+        }
+        return track.volumeAutomation;
     }
 
     std::vector<AutomationPoint> getAutomationPointsCopy(const TrackState& track) const
     {
         return getAutomationPoints(track);
+    }
+
+    std::vector<AutomationPoint> getAutomationPointsCopy(const TrackState& track, int laneIndex) const
+    {
+        return getAutomationPoints(track, laneIndex);
     }
 
     float automationMinimumValue(const TrackState& track) const
@@ -1328,18 +1744,18 @@ private:
         return 1.0f;
     }
 
-    int nearestAutomationPointIndex(const TrackState& track, double beat, float value) const
+    int nearestAutomationPointIndex(const TrackState& track, double beat, float value, int laneIndex) const
     {
-        const auto& points = getAutomationPoints(track);
+        const auto& points = getAutomationPoints(track, laneIndex);
         for (size_t i = 0; i < points.size(); ++i)
             if (std::abs(points[i].beat - beat) < 0.001 && std::abs(points[i].value - value) < 0.001f)
                 return static_cast<int>(i);
         return -1;
     }
 
-    int indexOfAutomationPoint(const TrackState& track, double beat, float value) const
+    int indexOfAutomationPoint(const TrackState& track, double beat, float value, int laneIndex) const
     {
-        return nearestAutomationPointIndex(track, beat, value);
+        return nearestAutomationPointIndex(track, beat, value, laneIndex);
     }
 
     SessionState& session;
@@ -1348,6 +1764,7 @@ private:
     std::function<void()> onRegionEdit;
     std::function<void()> onAutomationLayoutChange;
     std::function<void()> onTrackEdit;
+    std::function<void(int)> onHeaderWidthChanged;
     juce::AudioFormatManager audioFormatManager;
     juce::AudioThumbnailCache thumbnailCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> waveformCache;
@@ -1355,6 +1772,7 @@ private:
     DragState dragState;
     int selectedAutomationTrackId { -1 };
     int selectedAutomationPointIndex { -1 };
+    int selectedAutomationLaneIndex { 0 };
 };
 
 class MainComponent::PianoRollComponent final : public Component
@@ -1368,6 +1786,18 @@ public:
 
     void refresh()
     {
+        repaint();
+    }
+
+    void zoomIn()
+    {
+        session.layout.midiEditorZoom = juce::jlimit(1.0f, 8.0f, session.layout.midiEditorZoom * 1.25f);
+        repaint();
+    }
+
+    void zoomOut()
+    {
+        session.layout.midiEditorZoom = juce::jlimit(1.0f, 8.0f, session.layout.midiEditorZoom / 1.25f);
         repaint();
     }
 
@@ -1418,6 +1848,30 @@ public:
         const auto layout = layoutForCurrentRegion();
         if (! layout.gridArea.contains(event.getPosition()))
             return;
+
+        if (session.layout.midiEditorTool == 1)
+        {
+            clearNoteSelection(*region);
+            Region::MidiNote note;
+            note.pitch = pitchForY(layout.gridArea, event.y);
+            note.startBeat = snapBeat(beatForX(layout.gridArea, event.x));
+            note.lengthInBeats = 1.0;
+            note.velocity = 100;
+            note.selected = true;
+            note.lengthInBeats = juce::jmin(note.lengthInBeats, juce::jmax(minimumNoteLength, visibleBeatSpan(*region) - note.startBeat));
+            region->midiNotes.push_back(note);
+            dragState.active = true;
+            dragState.noteIndex = static_cast<int>(region->midiNotes.size()) - 1;
+            dragState.mode = NoteHandle::right;
+            dragState.dragStart = event.getPosition();
+            dragState.originalStartBeat = note.startBeat;
+            dragState.originalLengthBeats = note.lengthInBeats;
+            dragState.originalPitch = note.pitch;
+            if (onEdit != nullptr)
+                onEdit();
+            repaint();
+            return;
+        }
 
         const auto hit = hitTestNote(*region, layout.gridArea, event.getPosition());
         clearNoteSelection(*region);
@@ -1604,7 +2058,10 @@ private:
         g.setColour(Colours::white.withAlpha(0.58f));
         g.setFont(FontOptions(13.0f));
         g.drawText(region.name + " / " + String(region.midiNotes.size()) + " notes",
-                   header, Justification::centredLeft, false);
+                   header.removeFromLeft(220), Justification::centredLeft, false);
+        g.setColour(Colours::white.withAlpha(0.42f));
+        g.setFont(FontOptions(12.0f, Font::bold));
+        g.drawText("Zoom " + String(session.layout.midiEditorZoom, 2) + "x", header, Justification::centredRight, false);
     }
 
     void paintPitchKeyboard(Graphics& g, Rectangle<int> area) const
@@ -1638,8 +2095,9 @@ private:
             g.drawHorizontalLine(row.getBottom() - 1, static_cast<float>(row.getX()), static_cast<float>(row.getRight()));
         }
 
-        const auto beatWidth = static_cast<float>(area.getWidth()) / static_cast<float>(juce::jmax(1.0, region.lengthInBeats));
-        const auto beatCount = static_cast<int>(std::ceil(region.lengthInBeats));
+        const auto visibleBeats = visibleBeatSpan(region);
+        const auto beatWidth = static_cast<float>(area.getWidth()) / static_cast<float>(juce::jmax(1.0, visibleBeats));
+        const auto beatCount = static_cast<int>(std::ceil(visibleBeats));
 
         for (int beat = 0; beat <= beatCount; ++beat)
         {
@@ -1691,14 +2149,14 @@ private:
         layout.gridArea = area;
 
         if (const auto* region = session.getSelectedRegion())
-            layout.beatWidth = static_cast<float>(layout.gridArea.getWidth()) / static_cast<float>(juce::jmax(1.0, region->lengthInBeats));
+            layout.beatWidth = static_cast<float>(layout.gridArea.getWidth()) / static_cast<float>(juce::jmax(1.0, visibleBeatSpan(*region)));
 
         return layout;
     }
 
     Rectangle<int> boundsForNote(Rectangle<int> gridArea, const Region& region, const Region::MidiNote& note) const
     {
-        const auto beatWidth = static_cast<float>(gridArea.getWidth()) / static_cast<float>(juce::jmax(1.0, region.lengthInBeats));
+        const auto beatWidth = static_cast<float>(gridArea.getWidth()) / static_cast<float>(juce::jmax(1.0, visibleBeatSpan(region)));
         const auto relativeStartBeat = note.startBeat;
         const auto x = gridArea.getX() + static_cast<int>(std::round(static_cast<float>(relativeStartBeat) * beatWidth));
         const auto width = juce::jmax(18, static_cast<int>(std::round(static_cast<float>(note.lengthInBeats) * beatWidth)));
@@ -1744,8 +2202,13 @@ private:
         const auto clampedX = juce::jlimit(gridArea.getX(), gridArea.getRight(), x);
         const auto normalised = static_cast<double>(clampedX - gridArea.getX()) / static_cast<double>(juce::jmax(1, gridArea.getWidth()));
         if (const auto* region = session.getSelectedRegion())
-            return juce::jlimit(0.0, juce::jmax(0.0, region->lengthInBeats - minimumNoteLength), normalised * region->lengthInBeats);
+            return juce::jlimit(0.0, juce::jmax(0.0, visibleBeatSpan(*region) - minimumNoteLength), normalised * visibleBeatSpan(*region));
         return 0.0;
+    }
+
+    double visibleBeatSpan(const Region& region) const
+    {
+        return juce::jmax(1.0, region.lengthInBeats / juce::jlimit(1.0f, 8.0f, session.layout.midiEditorZoom));
     }
 
     double snapBeat(double beat) const
@@ -1787,6 +2250,196 @@ private:
     DragState dragState;
 };
 
+class MainComponent::AudioClipEditorComponent final : public Component
+{
+public:
+    explicit AudioClipEditorComponent(SessionState& sessionToUse)
+        : session(sessionToUse),
+          thumbnailCache(16)
+    {
+        audioFormatManager.registerBasicFormats();
+    }
+
+    void refresh()
+    {
+        repaint();
+    }
+
+    void zoomIn()
+    {
+        session.layout.audioEditorZoom = juce::jlimit(1.0f, 8.0f, session.layout.audioEditorZoom * 1.25f);
+        repaint();
+    }
+
+    void zoomOut()
+    {
+        session.layout.audioEditorZoom = juce::jlimit(1.0f, 8.0f, session.layout.audioEditorZoom / 1.25f);
+        repaint();
+    }
+
+    void paint(Graphics& g) override
+    {
+        auto area = getLocalBounds();
+        g.fillAll(Colour::fromRGB(22, 25, 32));
+        g.setColour(Colours::white.withAlpha(0.06f));
+        g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 10.0f, 1.0f);
+
+        auto content = area.reduced(12);
+        auto header = content.removeFromTop(28);
+
+        const auto* region = session.getSelectedRegion();
+        if (region == nullptr || region->kind != RegionKind::audio)
+        {
+            g.setColour(Colours::white.withAlpha(0.88f));
+            g.setFont(FontOptions(15.0f, Font::bold));
+            g.drawText("Audio File Editor", header, Justification::centredLeft, false);
+            g.setColour(Colours::white.withAlpha(0.52f));
+            g.setFont(FontOptions(13.0f));
+            g.drawText("Select an audio region to open the file editor.", content, Justification::centred, true);
+            return;
+        }
+
+        g.setColour(Colours::white.withAlpha(0.90f));
+        g.setFont(FontOptions(15.0f, Font::bold));
+        g.drawText("Audio File Editor", header.removeFromLeft(140), Justification::centredLeft, false);
+        g.setColour(Colours::white.withAlpha(0.58f));
+        g.setFont(FontOptions(13.0f));
+        g.drawText(region->name + " / " + juce::String(region->lengthInBeats, 2) + " beats",
+                   header.removeFromLeft(220), Justification::centredLeft, false);
+        g.setColour(Colours::white.withAlpha(0.42f));
+        g.setFont(FontOptions(12.0f, Font::bold));
+        g.drawText("Zoom " + String(session.layout.audioEditorZoom, 2) + "x", header, Justification::centredRight, false);
+
+        auto waveformArea = content.removeFromTop(juce::jmax(80, content.getHeight() - 54));
+        auto footerArea = content;
+
+        g.setColour(Colour::fromRGB(27, 31, 39));
+        g.fillRoundedRectangle(waveformArea.toFloat(), 8.0f);
+
+        if (region->sourceFilePath.isEmpty())
+        {
+            g.setColour(Colours::white.withAlpha(0.50f));
+            g.drawText("No file assigned to this audio region.", waveformArea, Justification::centred, true);
+        }
+        else if (auto* thumbnail = getThumbnailForFile(region->sourceFilePath))
+        {
+            auto drawArea = waveformArea.reduced(12, 14);
+            g.setColour(Colours::white.withAlpha(0.05f));
+            g.fillRoundedRectangle(drawArea.toFloat(), 6.0f);
+
+            const auto regionDurationSeconds = juce::jmax(0.01, region->lengthInBeats * 60.0 / juce::jmax(1.0, session.transport.bpm));
+            const auto visibleDurationSeconds = juce::jmax(0.01, regionDurationSeconds / juce::jlimit(1.0f, 8.0f, session.layout.audioEditorZoom));
+            const auto startSeconds = juce::jmax(0.0, region->sourceOffsetSeconds);
+            const auto endSeconds = juce::jmin(thumbnail->getTotalLength(), startSeconds + visibleDurationSeconds);
+
+            g.setColour(region->colour.withAlpha(0.18f));
+            g.fillRoundedRectangle(drawArea.toFloat(), 6.0f);
+            thumbnail->drawChannels(g,
+                                    drawArea,
+                                    startSeconds,
+                                    juce::jmax(startSeconds + 0.001, endSeconds),
+                                    1.0f);
+
+            const auto fadeInWidth = static_cast<float>(drawArea.getWidth()) * static_cast<float>(region->fadeInBeats / juce::jmax(0.001, region->lengthInBeats));
+            const auto fadeOutWidth = static_cast<float>(drawArea.getWidth()) * static_cast<float>(region->fadeOutBeats / juce::jmax(0.001, region->lengthInBeats));
+            g.setColour(Colours::white.withAlpha(0.32f));
+            g.drawLine(drawArea.getX() + 8.0f,
+                       static_cast<float>(drawArea.getBottom() - 10),
+                       drawArea.getX() + juce::jmax(8.0f, fadeInWidth),
+                       static_cast<float>(drawArea.getY() + 10),
+                       1.4f);
+            g.drawLine(static_cast<float>(drawArea.getRight()) - juce::jmax(8.0f, fadeOutWidth),
+                       static_cast<float>(drawArea.getY() + 10),
+                       static_cast<float>(drawArea.getRight()) - 8.0f,
+                       static_cast<float>(drawArea.getBottom() - 10),
+                       1.4f);
+
+            g.setColour(Colours::white.withAlpha(0.48f));
+            g.setFont(FontOptions(11.0f, Font::bold));
+            g.drawText("Start " + juce::String(region->sourceOffsetSeconds, 2) + "s",
+                       drawArea.removeFromBottom(16), Justification::centredLeft, false);
+        }
+        else
+        {
+            g.setColour(Colours::white.withAlpha(0.50f));
+            g.drawText("The assigned file could not be read.", waveformArea, Justification::centred, true);
+        }
+
+        auto chipArea = footerArea.removeFromTop(20);
+        paintChip(g, chipArea.removeFromLeft(126), "Fade In", juce::String(region->fadeInBeats, 2) + " beats");
+        chipArea.removeFromLeft(8);
+        paintChip(g, chipArea.removeFromLeft(132), "Fade Out", juce::String(region->fadeOutBeats, 2) + " beats");
+        chipArea.removeFromLeft(8);
+        paintChip(g, chipArea.removeFromLeft(120), "Gain", juce::String(region->gain, 2) + "x");
+        footerArea.removeFromTop(6);
+        g.setColour(Colours::white.withAlpha(0.52f));
+        g.setFont(FontOptions(12.0f));
+        g.drawText(region->sourceFilePath.isNotEmpty()
+                       ? shortenForSidebar(region->sourceFilePath, 72)
+                       : "No source file",
+                   footerArea, Justification::centredLeft, false);
+    }
+
+    void mouseDown(const MouseEvent& event) override
+    {
+        if (session.layout.audioEditorTool != 1)
+            return;
+
+        auto area = getLocalBounds().reduced(12);
+        area.removeFromTop(28);
+        const auto waveformArea = area.removeFromTop(juce::jmax(80, area.getHeight() - 54));
+        if (! waveformArea.contains(event.getPosition()))
+            return;
+
+        zoomIn();
+    }
+
+    void mouseDoubleClick(const MouseEvent&) override
+    {
+        session.layout.audioEditorZoom = 1.0f;
+        repaint();
+    }
+
+private:
+    juce::AudioThumbnail* getThumbnailForFile(const juce::String& filePath)
+    {
+        if (filePath.isEmpty())
+            return nullptr;
+
+        if (const auto it = waveformCache.find(filePath); it != waveformCache.end())
+            return it->second.get();
+
+        auto thumbnail = std::make_unique<juce::AudioThumbnail>(512, audioFormatManager, thumbnailCache);
+        auto source = std::make_unique<juce::FileInputSource>(juce::File(filePath));
+        if (! thumbnail->setSource(source.release()))
+            return nullptr;
+
+        auto* rawThumbnail = thumbnail.get();
+        waveformCache[filePath] = std::move(thumbnail);
+        return rawThumbnail;
+    }
+
+    void paintChip(Graphics& g, Rectangle<int> bounds, const String& title, const String& value) const
+    {
+        g.setColour(Colour::fromRGB(34, 39, 49));
+        g.fillRoundedRectangle(bounds.toFloat(), 7.0f);
+        g.setColour(Colours::white.withAlpha(0.12f));
+        g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 7.0f, 1.0f);
+        auto inner = bounds.reduced(8, 4);
+        g.setColour(Colours::white.withAlpha(0.48f));
+        g.setFont(FontOptions(10.0f, Font::bold));
+        g.drawText(title.toUpperCase(), inner.removeFromTop(10), Justification::centredLeft, false);
+        g.setColour(Colours::white.withAlpha(0.86f));
+        g.setFont(FontOptions(12.0f));
+        g.drawText(value, inner, Justification::centredLeft, false);
+    }
+
+    SessionState& session;
+    juce::AudioFormatManager audioFormatManager;
+    juce::AudioThumbnailCache thumbnailCache;
+    std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> waveformCache;
+};
+
 class MainComponent::InspectorComponent final : public Component
 {
 public:
@@ -1818,32 +2471,64 @@ public:
         audioRegionLabel.setFont(FontOptions(15.0f, Font::bold));
         audioFileLabel.setFont(FontOptions(13.0f));
         regionGainLabel.setFont(FontOptions(13.0f, Font::bold));
+        pluginValueLabel.setFont(FontOptions(12.0f, Font::bold));
+        pluginLaneNameLabel.setFont(FontOptions(12.0f, Font::bold));
+        pluginLaneStatusLabel.setFont(FontOptions(12.0f));
         volumeLabel.setFont(FontOptions(12.0f, Font::bold));
         panLabel.setFont(FontOptions(12.0f, Font::bold));
+        scInsertStatusLabel.setFont(FontOptions(12.0f));
+        scInsertMetersLabel.setFont(FontOptions(12.0f, Font::bold));
+        scInsertWetLabel.setFont(FontOptions(12.0f, Font::bold));
+        scInsertTrimLabel.setFont(FontOptions(12.0f, Font::bold));
         automationModeLabel.setFont(FontOptions(12.0f, Font::bold));
         automationValueLabel.setFont(FontOptions(12.0f));
         automationWriteLabel.setFont(FontOptions(12.0f, Font::bold));
+        pluginParameterLabel.setFont(FontOptions(12.0f, Font::bold));
+        pluginLaneActionsLabel.setFont(FontOptions(12.0f, Font::bold));
         superColliderLabel.setFont(FontOptions(13.0f));
         processorLabel.setFont(FontOptions(13.0f));
         slotOneLabel.setFont(FontOptions(12.0f));
         slotTwoLabel.setFont(FontOptions(12.0f));
 
         addAndMakeVisible(titleLabel);
+        addAndMakeVisible(clipSectionToggleButton);
+        addAndMakeVisible(trackSectionToggleButton);
+        addAndMakeVisible(channelSectionToggleButton);
         addAndMakeVisible(trackNameLabel);
         addAndMakeVisible(roleLabel);
         addAndMakeVisible(audioRegionLabel);
         addAndMakeVisible(audioFileLabel);
         addAndMakeVisible(regionGainLabel);
         addAndMakeVisible(regionGainSlider);
+        addAndMakeVisible(pluginValueLabel);
+        addAndMakeVisible(pluginValueSlider);
+        addAndMakeVisible(pluginLaneNameLabel);
+        addAndMakeVisible(pluginLaneNameEditor);
+        addAndMakeVisible(pluginLaneStatusLabel);
+        addAndMakeVisible(scInsertStatusLabel);
+        addAndMakeVisible(scInsertMetersLabel);
+        addAndMakeVisible(scInsertWetLabel);
+        addAndMakeVisible(scInsertWetSlider);
+        addAndMakeVisible(scInsertTrimLabel);
+        addAndMakeVisible(scInsertTrimSlider);
+        addAndMakeVisible(scInsertBypassButton);
         addAndMakeVisible(volumeLabel);
         addAndMakeVisible(panLabel);
         addAndMakeVisible(automationModeLabel);
         addAndMakeVisible(automationValueLabel);
         addAndMakeVisible(automationWriteLabel);
+        addAndMakeVisible(pluginParameterLabel);
+        addAndMakeVisible(pluginParameterBox);
+        addAndMakeVisible(addPluginAutomationButton);
+        addAndMakeVisible(pluginLaneActionsLabel);
+        addAndMakeVisible(movePluginLaneUpButton);
+        addAndMakeVisible(movePluginLaneDownButton);
+        addAndMakeVisible(removePluginLaneButton);
         addAndMakeVisible(assignAudioButton);
         addAndMakeVisible(clearAudioButton);
         addAndMakeVisible(showVolumeAutomationButton);
         addAndMakeVisible(showPanAutomationButton);
+        addAndMakeVisible(showPluginAutomationButton);
         addAndMakeVisible(hideAutomationButton);
         addAndMakeVisible(readAutomationButton);
         addAndMakeVisible(touchAutomationButton);
@@ -1855,16 +2540,104 @@ public:
         addAndMakeVisible(loadSlotOneButton);
         addAndMakeVisible(openSlotOneButton);
         addAndMakeVisible(clearSlotOneButton);
+        addAndMakeVisible(slotOneMeterBadge);
         addAndMakeVisible(loadSlotTwoButton);
         addAndMakeVisible(openSlotTwoButton);
         addAndMakeVisible(clearSlotTwoButton);
+        addAndMakeVisible(slotTwoMeterBadge);
         addAndMakeVisible(volumeSlider);
         addAndMakeVisible(panSlider);
+
+        auto configureSectionToggle = [] (TextButton& button)
+        {
+            button.setColour(TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
+            button.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+        };
+        configureSectionToggle(clipSectionToggleButton);
+        configureSectionToggle(trackSectionToggleButton);
+        configureSectionToggle(channelSectionToggleButton);
+        clipSectionToggleButton.onClick = [this] { clipSectionExpanded = ! clipSectionExpanded; updateSectionToggleButtons(); resized(); repaint(); };
+        trackSectionToggleButton.onClick = [this] { trackSectionExpanded = ! trackSectionExpanded; updateSectionToggleButtons(); resized(); repaint(); };
+        channelSectionToggleButton.onClick = [this] { channelSectionExpanded = ! channelSectionExpanded; updateSectionToggleButtons(); resized(); repaint(); };
+        updateSectionToggleButtons();
 
         volumeLabel.setText("Volume", dontSendNotification);
         panLabel.setText("Pan", dontSendNotification);
         automationModeLabel.setText("Automation lane", dontSendNotification);
         automationWriteLabel.setText("Write automation", dontSendNotification);
+        pluginParameterLabel.setText("Plugin parameter", dontSendNotification);
+        pluginValueLabel.setText("Parameter value", dontSendNotification);
+        pluginLaneNameLabel.setText("Lane name", dontSendNotification);
+        pluginLaneStatusLabel.setText({}, dontSendNotification);
+        scInsertMetersLabel.setText("SC insert", dontSendNotification);
+        scInsertWetLabel.setText("Wet / Dry", dontSendNotification);
+        scInsertTrimLabel.setText("Output trim", dontSendNotification);
+        scInsertBypassButton.setButtonText("SC Bypass");
+        pluginLaneActionsLabel.setText("Lane actions", dontSendNotification);
+        addPluginAutomationButton.setButtonText("Add");
+        addPluginAutomationButton.setColour(TextButton::buttonColourId, Colour::fromRGB(67, 73, 88));
+        addPluginAutomationButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.90f));
+        movePluginLaneUpButton.setButtonText("Up");
+        movePluginLaneDownButton.setButtonText("Down");
+        removePluginLaneButton.setButtonText("Remove");
+        duplicatePluginLaneButton.setButtonText("Duplicate");
+        remapPluginLaneButton.setButtonText("Remap");
+        for (auto* button : { &movePluginLaneUpButton, &movePluginLaneDownButton, &removePluginLaneButton, &duplicatePluginLaneButton, &remapPluginLaneButton })
+        {
+            button->setColour(TextButton::buttonColourId, Colour::fromRGB(67, 73, 88));
+            button->setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.90f));
+        }
+        scInsertBypassButton.setColour(TextButton::buttonColourId, Colour::fromRGB(67, 73, 88));
+        scInsertBypassButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.90f));
+        scInsertBypassButton.onClick = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto slotIndex = findSuperColliderInsertSlot(*track);
+                if (slotIndex >= 0)
+                {
+                    const auto bypassed = ! track->inserts[static_cast<size_t>(slotIndex)].bypassed;
+                    if (audioEngine.setTrackSlotBypassed(track->id, slotIndex, bypassed))
+                    {
+                        refresh();
+                        if (onAutomationEdited != nullptr)
+                            onAutomationEdited();
+                    }
+                }
+            }
+        };
+        pluginLaneNameEditor.setColour(juce::TextEditor::backgroundColourId, Colour::fromRGB(31, 36, 46));
+        pluginLaneNameEditor.setColour(juce::TextEditor::textColourId, Colours::white.withAlpha(0.92f));
+        pluginLaneNameEditor.setColour(juce::TextEditor::outlineColourId, Colours::white.withAlpha(0.10f));
+        pluginLaneNameEditor.setColour(juce::TextEditor::focusedOutlineColourId, Colour::fromRGB(96, 124, 172));
+        pluginLaneNameEditor.onTextChange = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+                if (auto* pluginLane = getSelectedPluginAutomationLane(*track))
+                {
+                    pluginLane->displayName = pluginLaneNameEditor.getText().trim();
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+        };
+
+        pluginValueSlider.setSliderStyle(Slider::LinearHorizontal);
+        pluginValueSlider.setTextBoxStyle(Slider::TextBoxRight, false, 56, 20);
+        pluginValueSlider.setRange(0.0, 1.0, 0.001);
+        pluginValueSlider.onValueChange = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+                if (auto* pluginLane = getSelectedPluginAutomationLane(*track))
+                {
+                    const auto value = static_cast<float>(pluginValueSlider.getValue());
+                    audioEngine.setTrackPluginParameterValue(track->id, pluginLane->slotIndex, pluginLane->parameterIndex, value);
+                    writeAutomationPoint(*track, AutomationLaneMode::plugin, value);
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+        };
+        pluginValueSlider.onDragStart = [this] { beginAutomationGesture(AutomationLaneMode::plugin); };
+        pluginValueSlider.onDragEnd = [this] { endAutomationGesture(AutomationLaneMode::plugin); };
 
         volumeSlider.setSliderStyle(Slider::LinearHorizontal);
         volumeSlider.setTextBoxStyle(Slider::TextBoxRight, false, 56, 20);
@@ -1905,16 +2678,65 @@ public:
         audioRegionLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.72f));
         audioFileLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.56f));
         regionGainLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.60f));
+        pluginValueLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
+        pluginLaneNameLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
+        pluginLaneStatusLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.56f));
+        scInsertStatusLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.56f));
+        scInsertMetersLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
+        scInsertWetLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
+        scInsertTrimLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
+        pluginLaneActionsLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
         volumeLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
         panLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
         automationModeLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
         automationValueLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.56f));
         automationWriteLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
+        pluginParameterLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.62f));
         trackNameLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.96f));
         roleLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.64f));
 
-        for (auto* label : { &titleLabel, &trackNameLabel, &roleLabel, &superColliderLabel, &processorLabel, &audioRegionLabel, &audioFileLabel, &regionGainLabel, &volumeLabel, &panLabel, &automationModeLabel, &automationValueLabel, &automationWriteLabel, &slotOneLabel, &slotTwoLabel })
+        for (auto* label : { &titleLabel, &trackNameLabel, &roleLabel, &superColliderLabel, &processorLabel, &audioRegionLabel, &audioFileLabel, &regionGainLabel, &pluginValueLabel, &pluginLaneNameLabel, &pluginLaneStatusLabel, &scInsertStatusLabel, &scInsertMetersLabel, &scInsertWetLabel, &scInsertTrimLabel, &pluginLaneActionsLabel, &volumeLabel, &panLabel, &automationModeLabel, &automationValueLabel, &automationWriteLabel, &pluginParameterLabel, &slotOneLabel, &slotTwoLabel })
             label->setJustificationType(Justification::topLeft);
+
+        scInsertWetSlider.setSliderStyle(Slider::LinearHorizontal);
+        scInsertWetSlider.setTextBoxStyle(Slider::TextBoxRight, false, 56, 20);
+        scInsertWetSlider.setRange(0.0, 100.0, 0.1);
+        scInsertWetSlider.setTextValueSuffix("%");
+        scInsertWetSlider.onValueChange = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto slotIndex = findSuperColliderInsertSlot(*track);
+                if (slotIndex >= 0)
+                {
+                    const auto wetMix = static_cast<float>(scInsertWetSlider.getValue() / 100.0);
+                    const auto outputTrimDb = track->inserts[static_cast<size_t>(slotIndex)].outputTrimDb;
+                    if (audioEngine.setTrackSuperColliderInsertMix(track->id, slotIndex, wetMix, outputTrimDb)
+                        && onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
+
+        scInsertTrimSlider.setSliderStyle(Slider::LinearHorizontal);
+        scInsertTrimSlider.setTextBoxStyle(Slider::TextBoxRight, false, 56, 20);
+        scInsertTrimSlider.setRange(-24.0, 24.0, 0.1);
+        scInsertTrimSlider.setTextValueSuffix(" dB");
+        scInsertTrimSlider.onValueChange = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto slotIndex = findSuperColliderInsertSlot(*track);
+                if (slotIndex >= 0)
+                {
+                    const auto wetMix = track->inserts[static_cast<size_t>(slotIndex)].wetMix;
+                    const auto outputTrimDb = static_cast<float>(scInsertTrimSlider.getValue());
+                    if (audioEngine.setTrackSuperColliderInsertMix(track->id, slotIndex, wetMix, outputTrimDb)
+                        && onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
 
         regionGainSlider.setSliderStyle(Slider::LinearHorizontal);
         regionGainSlider.setTextBoxStyle(Slider::TextBoxRight, false, 56, 20);
@@ -1977,6 +2799,7 @@ public:
 
         configureAutomationButton(showVolumeAutomationButton, "Volume", AutomationLaneMode::volume);
         configureAutomationButton(showPanAutomationButton, "Pan", AutomationLaneMode::pan);
+        configureAutomationButton(showPluginAutomationButton, "Plugin", AutomationLaneMode::plugin);
         hideAutomationButton.setButtonText("Collapse");
         hideAutomationButton.setColour(TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
         hideAutomationButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.86f));
@@ -1995,6 +2818,205 @@ public:
         configureAutomationWriteModeButton(readAutomationButton, "Read", AutomationWriteMode::read);
         configureAutomationWriteModeButton(touchAutomationButton, "Touch", AutomationWriteMode::touch);
         configureAutomationWriteModeButton(latchAutomationButton, "Latch", AutomationWriteMode::latch);
+        pluginParameterBox.onChange = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto selectedIndex = pluginParameterBox.getSelectedId() - 1;
+                if (selectedIndex >= 0 && selectedIndex < static_cast<int>(track->pluginAutomationLanes.size()))
+                {
+                    track->selectedPluginAutomationLaneIndex = selectedIndex;
+                    track->visibleAutomationLane = AutomationLaneMode::plugin;
+                    track->automationExpanded = true;
+                    pluginValueSlider.setValue(getSelectedPluginAutomationValue(*track), dontSendNotification);
+                    updateAutomationUI(*track);
+                    if (onAutomationLayoutChange != nullptr)
+                        onAutomationLayoutChange();
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
+        movePluginLaneUpButton.onClick = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto index = track->selectedPluginAutomationLaneIndex;
+                if (index > 0 && index < static_cast<int>(track->pluginAutomationLanes.size()))
+                {
+                    std::iter_swap(track->pluginAutomationLanes.begin() + index,
+                                   track->pluginAutomationLanes.begin() + (index - 1));
+                    track->selectedPluginAutomationLaneIndex = index - 1;
+                    refresh();
+                    if (onAutomationLayoutChange != nullptr)
+                        onAutomationLayoutChange();
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
+        movePluginLaneDownButton.onClick = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto index = track->selectedPluginAutomationLaneIndex;
+                if (index >= 0 && index + 1 < static_cast<int>(track->pluginAutomationLanes.size()))
+                {
+                    std::iter_swap(track->pluginAutomationLanes.begin() + index,
+                                   track->pluginAutomationLanes.begin() + (index + 1));
+                    track->selectedPluginAutomationLaneIndex = index + 1;
+                    refresh();
+                    if (onAutomationLayoutChange != nullptr)
+                        onAutomationLayoutChange();
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
+        removePluginLaneButton.onClick = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto index = track->selectedPluginAutomationLaneIndex;
+                if (index >= 0 && index < static_cast<int>(track->pluginAutomationLanes.size()))
+                {
+                    track->pluginAutomationLanes.erase(track->pluginAutomationLanes.begin() + index);
+                    if (track->pluginAutomationLanes.empty())
+                    {
+                        track->selectedPluginAutomationLaneIndex = -1;
+                        if (track->visibleAutomationLane == AutomationLaneMode::plugin)
+                            track->visibleAutomationLane = AutomationLaneMode::volume;
+                    }
+                    else
+                    {
+                        track->selectedPluginAutomationLaneIndex = juce::jmin(index, static_cast<int>(track->pluginAutomationLanes.size()) - 1);
+                    }
+
+                    refresh();
+                    if (onAutomationLayoutChange != nullptr)
+                        onAutomationLayoutChange();
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
+        duplicatePluginLaneButton.onClick = [this]
+        {
+            if (auto* track = session.getSelectedTrack())
+            {
+                const auto index = track->selectedPluginAutomationLaneIndex;
+                if (index >= 0 && index < static_cast<int>(track->pluginAutomationLanes.size()))
+                {
+                    auto duplicate = track->pluginAutomationLanes[static_cast<size_t>(index)];
+                    duplicate.displayName = duplicate.displayName.isNotEmpty()
+                        ? duplicate.displayName + " Copy"
+                        : duplicate.parameterName + " Copy";
+                    track->pluginAutomationLanes.insert(track->pluginAutomationLanes.begin() + index + 1, std::move(duplicate));
+                    track->selectedPluginAutomationLaneIndex = index + 1;
+                    refresh();
+                    if (onAutomationLayoutChange != nullptr)
+                        onAutomationLayoutChange();
+                    if (onAutomationEdited != nullptr)
+                        onAutomationEdited();
+                }
+            }
+        };
+        remapPluginLaneButton.onClick = [this]
+        {
+            auto* track = session.getSelectedTrack();
+            auto* pluginLane = track != nullptr ? getSelectedPluginAutomationLane(*track) : nullptr;
+            if (track == nullptr || pluginLane == nullptr)
+                return;
+
+            const auto parameterChoices = audioEngine.getAutomatableParameters(track->id);
+            juce::PopupMenu menu;
+            for (int i = 0; i < static_cast<int>(parameterChoices.size()); ++i)
+                menu.addItem(i + 1, parameterChoices[static_cast<size_t>(i)].name);
+
+            menu.showMenuAsync(juce::PopupMenu::Options(), [this, trackId = track->id, parameterChoices] (int result)
+            {
+                if (result <= 0)
+                    return;
+
+                auto* targetTrack = session.getSelectedTrack();
+                auto* targetLane = targetTrack != nullptr ? getSelectedPluginAutomationLane(*targetTrack) : nullptr;
+                if (targetTrack == nullptr || targetTrack->id != trackId || targetLane == nullptr)
+                    return;
+
+                const auto choiceIndex = result - 1;
+                if (choiceIndex < 0 || choiceIndex >= static_cast<int>(parameterChoices.size()))
+                    return;
+
+                const auto& choice = parameterChoices[static_cast<size_t>(choiceIndex)];
+                targetLane->slotIndex = choice.slotIndex;
+                targetLane->parameterIndex = choice.parameterIndex;
+                targetLane->parameterName = choice.name;
+                refresh();
+                if (onAutomationLayoutChange != nullptr)
+                    onAutomationLayoutChange();
+                if (onAutomationEdited != nullptr)
+                    onAutomationEdited();
+            });
+        };
+        addPluginAutomationButton.onClick = [this]
+        {
+            auto* track = session.getSelectedTrack();
+            if (track == nullptr)
+                return;
+
+            const auto parameterChoices = audioEngine.getAutomatableParameters(track->id);
+            juce::PopupMenu menu;
+
+            for (int i = 0; i < static_cast<int>(parameterChoices.size()); ++i)
+            {
+                const auto& choice = parameterChoices[static_cast<size_t>(i)];
+                menu.addItem(i + 1, choice.name);
+            }
+
+            menu.showMenuAsync(juce::PopupMenu::Options(), [this, trackId = track->id, parameterChoices] (int result)
+            {
+                if (result <= 0)
+                    return;
+
+                auto* targetTrack = session.getSelectedTrack();
+                if (targetTrack == nullptr || targetTrack->id != trackId)
+                    return;
+
+                const auto choiceIndex = result - 1;
+                if (choiceIndex < 0 || choiceIndex >= static_cast<int>(parameterChoices.size()))
+                    return;
+
+                const auto& choice = parameterChoices[static_cast<size_t>(choiceIndex)];
+                const auto existingLane = std::find_if(targetTrack->pluginAutomationLanes.begin(),
+                                                       targetTrack->pluginAutomationLanes.end(),
+                                                       [&choice] (const auto& lane)
+                                                       {
+                                                           return lane.slotIndex == choice.slotIndex
+                                                               && lane.parameterIndex == choice.parameterIndex;
+                                                       });
+
+                if (existingLane != targetTrack->pluginAutomationLanes.end())
+                    targetTrack->selectedPluginAutomationLaneIndex = static_cast<int>(std::distance(targetTrack->pluginAutomationLanes.begin(), existingLane));
+                else
+                {
+                    PluginAutomationLane lane;
+                    lane.slotIndex = choice.slotIndex;
+                    lane.parameterIndex = choice.parameterIndex;
+                    lane.parameterName = choice.name;
+                    lane.displayName = {};
+                    targetTrack->pluginAutomationLanes.push_back(std::move(lane));
+                    targetTrack->selectedPluginAutomationLaneIndex = static_cast<int>(targetTrack->pluginAutomationLanes.size()) - 1;
+                }
+
+                targetTrack->visibleAutomationLane = AutomationLaneMode::plugin;
+                targetTrack->automationExpanded = true;
+                refresh();
+                if (onAutomationLayoutChange != nullptr)
+                    onAutomationLayoutChange();
+                if (onAutomationEdited != nullptr)
+                    onAutomationEdited();
+            });
+        };
 
         refresh();
     }
@@ -2011,16 +3033,52 @@ public:
             processorLabel.setTooltip(describeProcessorChain(*track));
             slotOneLabel.setText(describePluginSlot(*track, 0), dontSendNotification);
             slotTwoLabel.setText(describePluginSlot(*track, 1), dontSendNotification);
-            const auto slotChoicesOne = audioEngine.getAvailablePluginChoices(*track, 0);
-            const auto slotChoicesTwo = audioEngine.getAvailablePluginChoices(*track, 1);
-            loadSlotOneButton.setEnabled(! slotChoicesOne.empty());
-            loadSlotTwoButton.setEnabled(! slotChoicesTwo.empty());
-            openSlotOneButton.setEnabled(hasAudioUnitSlot(*track, 0));
-            openSlotTwoButton.setEnabled(hasAudioUnitSlot(*track, 1));
-            clearSlotOneButton.setEnabled(hasAudioUnitSlot(*track, 0));
-            clearSlotTwoButton.setEnabled(hasAudioUnitSlot(*track, 1));
+            updateInsertMeterBadge(slotOneMeterBadge, *track, 0);
+            updateInsertMeterBadge(slotTwoMeterBadge, *track, 1);
+            configureInsertSlotRow(*track, 0, loadSlotOneButton, openSlotOneButton, clearSlotOneButton);
+            configureInsertSlotRow(*track, 1, loadSlotTwoButton, openSlotTwoButton, clearSlotTwoButton);
             volumeSlider.setValue(track->mixer.volume, dontSendNotification);
             panSlider.setValue(track->mixer.pan, dontSendNotification);
+            pluginParameterBox.clear(dontSendNotification);
+            for (int i = 0; i < static_cast<int>(track->pluginAutomationLanes.size()); ++i)
+                pluginParameterBox.addItem(describePluginAutomationLane(track->pluginAutomationLanes[static_cast<size_t>(i)]), i + 1);
+
+            const auto selectedPluginLaneId = track->selectedPluginAutomationLaneIndex >= 0
+                && track->selectedPluginAutomationLaneIndex < static_cast<int>(track->pluginAutomationLanes.size())
+                    ? track->selectedPluginAutomationLaneIndex + 1
+                    : 0;
+
+            pluginParameterBox.setSelectedId(selectedPluginLaneId, dontSendNotification);
+            pluginParameterBox.setEnabled(! track->pluginAutomationLanes.empty());
+            addPluginAutomationButton.setEnabled(! audioEngine.getAutomatableParameters(track->id).empty());
+            movePluginLaneUpButton.setEnabled(track->selectedPluginAutomationLaneIndex > 0);
+            movePluginLaneDownButton.setEnabled(track->selectedPluginAutomationLaneIndex >= 0
+                                                && track->selectedPluginAutomationLaneIndex + 1 < static_cast<int>(track->pluginAutomationLanes.size()));
+            removePluginLaneButton.setEnabled(track->selectedPluginAutomationLaneIndex >= 0);
+            duplicatePluginLaneButton.setEnabled(track->selectedPluginAutomationLaneIndex >= 0);
+            if (const auto* pluginLane = getSelectedPluginAutomationLane(*track))
+            {
+                const auto bindingStatus = getPluginAutomationLaneStatus(*track, *pluginLane);
+                pluginValueSlider.setEnabled(bindingStatus.parameterAvailable);
+                pluginValueSlider.setValue(getSelectedPluginAutomationValue(*track), dontSendNotification);
+                pluginLaneNameEditor.setText(pluginLane->displayName, false);
+                if (! bindingStatus.slotAvailable)
+                    pluginLaneStatusLabel.setText("Saved target is missing: slot not available.", dontSendNotification);
+                else if (! bindingStatus.parameterAvailable)
+                    pluginLaneStatusLabel.setText("Saved target is missing: parameter not available. Use Remap.", dontSendNotification);
+                else
+                    pluginLaneStatusLabel.setText("Bound to " + bindingStatus.resolvedName, dontSendNotification);
+                remapPluginLaneButton.setEnabled(! audioEngine.getAutomatableParameters(track->id).empty());
+            }
+            else
+            {
+                pluginValueSlider.setEnabled(false);
+                pluginValueSlider.setValue(0.5, dontSendNotification);
+                pluginLaneNameEditor.setText({}, false);
+                pluginLaneStatusLabel.setText({}, dontSendNotification);
+                remapPluginLaneButton.setEnabled(false);
+            }
+            pluginLaneNameEditor.setEnabled(track->selectedPluginAutomationLaneIndex >= 0);
             updateAutomationUI(*track);
 
             if (const auto* region = session.getSelectedRegion())
@@ -2049,6 +3107,41 @@ public:
                 clearAudioButton.setEnabled(false);
                 regionGainSlider.setEnabled(false);
             }
+
+            const auto scInsertSlotIndex = findSuperColliderInsertSlot(*track);
+            if (scInsertSlotIndex >= 0)
+            {
+                const auto& insert = track->inserts[static_cast<size_t>(scInsertSlotIndex)];
+                const auto hostedMeters = audioEngine.getHostedInsertMeterState(track->id, scInsertSlotIndex);
+                const auto hostLive = hostedMeters.has_value() && hostedMeters->active;
+                const juce::String statusPrefix = insert.bypassed ? "Bypassed" : (hostLive ? "Host processed" : "Server proxy");
+                scInsertMetersLabel.setText("SC insert", dontSendNotification);
+                scInsertStatusLabel.setText(statusPrefix
+                                                + " / "
+                                                + insert.name
+                                                + " / In "
+                                                + juce::String(hostedMeters.has_value() ? hostedMeters->inputLevel : 0.0f, 2)
+                                                + " / Out "
+                                                + juce::String(hostedMeters.has_value() ? hostedMeters->outputLevel : 0.0f, 2),
+                                            dontSendNotification);
+                scInsertWetSlider.setValue(insert.wetMix * 100.0f, dontSendNotification);
+                scInsertTrimSlider.setValue(insert.outputTrimDb, dontSendNotification);
+                scInsertWetSlider.setEnabled(true);
+                scInsertTrimSlider.setEnabled(true);
+                scInsertBypassButton.setButtonText(insert.bypassed ? "Enable SC Insert" : "Bypass SC Insert");
+                scInsertBypassButton.setEnabled(true);
+            }
+            else
+            {
+                scInsertMetersLabel.setText("SC insert", dontSendNotification);
+                scInsertStatusLabel.setText("No SuperCollider insert on this track.", dontSendNotification);
+                scInsertWetSlider.setValue(100.0, dontSendNotification);
+                scInsertTrimSlider.setValue(0.0, dontSendNotification);
+                scInsertWetSlider.setEnabled(false);
+                scInsertTrimSlider.setEnabled(false);
+                scInsertBypassButton.setButtonText("SC Bypass");
+                scInsertBypassButton.setEnabled(false);
+            }
         }
     }
 
@@ -2065,42 +3158,83 @@ public:
 
     void resized() override
     {
+        static constexpr int sectionHeaderHeight = 34;
         auto area = getLocalBounds().reduced(16);
         titleLabel.setBounds(area.removeFromTop(28));
         area.removeFromTop(10);
 
         const auto remainingHeight = area.getHeight();
-        const auto clipHeight = jmin(176, remainingHeight);
+        const auto clipBodyHeight = clipSectionExpanded ? 130 : 0;
+        const auto clipHeight = jmin(sectionHeaderHeight + clipBodyHeight, remainingHeight);
         clipSectionBounds = area.removeFromTop(clipHeight);
         area.removeFromTop(jmin(12, area.getHeight()));
 
-        const auto trackHeight = area.getHeight() >= 156 ? jmin(156, area.getHeight()) : 0;
+        const auto trackBodyHeight = trackSectionExpanded ? 286 : 0;
+        const auto desiredTrackHeight = sectionHeaderHeight + trackBodyHeight;
+        const auto trackHeight = area.getHeight() >= sectionHeaderHeight ? jmin(desiredTrackHeight, area.getHeight()) : 0;
         trackSectionBounds = trackHeight > 0 ? area.removeFromTop(trackHeight) : Rectangle<int>();
         if (trackHeight > 0)
             area.removeFromTop(jmin(12, area.getHeight()));
 
-        const auto channelHeight = area.getHeight() >= 94 ? area.getHeight() : 0;
+        const auto channelBodyHeight = channelSectionExpanded ? juce::jmax(0, area.getHeight() - sectionHeaderHeight) : 0;
+        const auto channelHeight = area.getHeight() >= sectionHeaderHeight ? sectionHeaderHeight + channelBodyHeight : 0;
         channelSectionBounds = channelHeight > 0 ? area.removeFromTop(channelHeight) : Rectangle<int>();
 
-        auto clipArea = clipSectionBounds.reduced(14, 12);
-        clipArea.removeFromTop(10);
-        audioRegionLabel.setBounds(clipArea.removeFromTop(20));
-        clipArea.removeFromTop(2);
-        audioFileLabel.setBounds(clipArea.removeFromTop(26));
-        clipArea.removeFromTop(5);
-        auto clipButtons = clipArea.removeFromTop(26);
-        assignAudioButton.setBounds(clipButtons.removeFromLeft(158).reduced(0, 1));
-        clipButtons.removeFromLeft(8);
-        clearAudioButton.setBounds(clipButtons.removeFromLeft(102).reduced(0, 1));
-        clipArea.removeFromTop(8);
-        regionGainLabel.setBounds(clipArea.removeFromTop(16));
-        clipArea.removeFromTop(4);
-        regionGainSlider.setBounds(clipArea.removeFromTop(32));
+        if (! clipSectionBounds.isEmpty())
+        {
+            auto clipHeaderArea = clipSectionBounds.withHeight(sectionHeaderHeight);
+            clipSectionToggleButton.setBounds(clipHeaderArea.removeFromRight(28).translated(-10, 4));
+        }
+        else
+            clipSectionToggleButton.setBounds({});
 
         if (! trackSectionBounds.isEmpty())
         {
+            auto trackHeaderArea = trackSectionBounds.withHeight(sectionHeaderHeight);
+            trackSectionToggleButton.setBounds(trackHeaderArea.removeFromRight(28).translated(-10, 4));
+        }
+        else
+            trackSectionToggleButton.setBounds({});
+
+        if (! channelSectionBounds.isEmpty())
+        {
+            auto channelHeaderArea = channelSectionBounds.withHeight(sectionHeaderHeight);
+            channelSectionToggleButton.setBounds(channelHeaderArea.removeFromRight(28).translated(-10, 4));
+        }
+        else
+            channelSectionToggleButton.setBounds({});
+
+        auto clipArea = clipSectionBounds.reduced(14, 12);
+        if (clipSectionExpanded)
+        {
+            clipArea.removeFromTop(24);
+            audioRegionLabel.setBounds(clipArea.removeFromTop(20));
+            clipArea.removeFromTop(2);
+            audioFileLabel.setBounds(clipArea.removeFromTop(26));
+            clipArea.removeFromTop(5);
+            auto clipButtons = clipArea.removeFromTop(26);
+            assignAudioButton.setBounds(clipButtons.removeFromLeft(158).reduced(0, 1));
+            clipButtons.removeFromLeft(8);
+            clearAudioButton.setBounds(clipButtons.removeFromLeft(102).reduced(0, 1));
+            clipArea.removeFromTop(8);
+            regionGainLabel.setBounds(clipArea.removeFromTop(16));
+            clipArea.removeFromTop(4);
+            regionGainSlider.setBounds(clipArea.removeFromTop(32));
+        }
+        else
+        {
+            audioRegionLabel.setBounds({});
+            audioFileLabel.setBounds({});
+            assignAudioButton.setBounds({});
+            clearAudioButton.setBounds({});
+            regionGainLabel.setBounds({});
+            regionGainSlider.setBounds({});
+        }
+
+        if (! trackSectionBounds.isEmpty() && trackSectionExpanded)
+        {
             auto trackArea = trackSectionBounds.reduced(14, 16);
-            trackArea.removeFromTop(12);
+            trackArea.removeFromTop(24);
             trackNameLabel.setBounds(trackArea.removeFromTop(28));
             roleLabel.setBounds(trackArea.removeFromTop(20));
             trackArea.removeFromTop(4);
@@ -2112,9 +3246,48 @@ public:
             laneButtons.removeFromLeft(6);
             showPanAutomationButton.setBounds(laneButtons.removeFromLeft(90).reduced(0, 1));
             laneButtons.removeFromLeft(6);
+            showPluginAutomationButton.setBounds(laneButtons.removeFromLeft(82).reduced(0, 1));
+            laneButtons.removeFromLeft(6);
             hideAutomationButton.setBounds(laneButtons.removeFromLeft(68).reduced(0, 1));
             trackArea.removeFromTop(4);
             automationValueLabel.setBounds(trackArea.removeFromTop(16));
+            trackArea.removeFromTop(4);
+            pluginParameterLabel.setBounds(trackArea.removeFromTop(16));
+            auto pluginRow = trackArea.removeFromTop(24);
+            pluginParameterBox.setBounds(pluginRow.removeFromLeft(186));
+            pluginRow.removeFromLeft(6);
+            addPluginAutomationButton.setBounds(pluginRow.removeFromLeft(50).reduced(0, 1));
+            trackArea.removeFromTop(4);
+            pluginValueLabel.setBounds(trackArea.removeFromTop(16));
+            pluginValueSlider.setBounds(trackArea.removeFromTop(24));
+            trackArea.removeFromTop(4);
+            pluginLaneNameLabel.setBounds(trackArea.removeFromTop(16));
+            pluginLaneNameEditor.setBounds(trackArea.removeFromTop(24));
+            trackArea.removeFromTop(4);
+            pluginLaneStatusLabel.setBounds(trackArea.removeFromTop(18));
+            trackArea.removeFromTop(4);
+            scInsertMetersLabel.setBounds(trackArea.removeFromTop(16));
+            scInsertStatusLabel.setBounds(trackArea.removeFromTop(18));
+            trackArea.removeFromTop(4);
+            scInsertWetLabel.setBounds(trackArea.removeFromTop(16));
+            scInsertWetSlider.setBounds(trackArea.removeFromTop(24));
+            trackArea.removeFromTop(4);
+            scInsertTrimLabel.setBounds(trackArea.removeFromTop(16));
+            scInsertTrimSlider.setBounds(trackArea.removeFromTop(24));
+            trackArea.removeFromTop(4);
+            scInsertBypassButton.setBounds(trackArea.removeFromTop(24).removeFromLeft(134).reduced(0, 1));
+            trackArea.removeFromTop(4);
+            pluginLaneActionsLabel.setBounds(trackArea.removeFromTop(16));
+            auto laneActionRow = trackArea.removeFromTop(24);
+            movePluginLaneUpButton.setBounds(laneActionRow.removeFromLeft(54).reduced(0, 1));
+            laneActionRow.removeFromLeft(6);
+            movePluginLaneDownButton.setBounds(laneActionRow.removeFromLeft(64).reduced(0, 1));
+            laneActionRow.removeFromLeft(6);
+            duplicatePluginLaneButton.setBounds(laneActionRow.removeFromLeft(82).reduced(0, 1));
+            laneActionRow.removeFromLeft(6);
+            remapPluginLaneButton.setBounds(laneActionRow.removeFromLeft(70).reduced(0, 1));
+            laneActionRow.removeFromLeft(6);
+            removePluginLaneButton.setBounds(laneActionRow.removeFromLeft(78).reduced(0, 1));
             trackArea.removeFromTop(4);
             automationWriteLabel.setBounds(trackArea.removeFromTop(16));
             auto writeButtons = trackArea.removeFromTop(26);
@@ -2132,21 +3305,45 @@ public:
             automationModeLabel.setBounds({});
             automationValueLabel.setBounds({});
             automationWriteLabel.setBounds({});
+            pluginParameterLabel.setBounds({});
+            pluginParameterBox.setBounds({});
+            addPluginAutomationButton.setBounds({});
+            pluginValueLabel.setBounds({});
+            pluginValueSlider.setBounds({});
+            pluginLaneNameLabel.setBounds({});
+            pluginLaneNameEditor.setBounds({});
+            pluginLaneStatusLabel.setBounds({});
+            scInsertMetersLabel.setBounds({});
+            scInsertStatusLabel.setBounds({});
+            scInsertWetLabel.setBounds({});
+            scInsertWetSlider.setBounds({});
+            scInsertTrimLabel.setBounds({});
+            scInsertTrimSlider.setBounds({});
+            scInsertBypassButton.setBounds({});
+            pluginLaneActionsLabel.setBounds({});
+            movePluginLaneUpButton.setBounds({});
+            movePluginLaneDownButton.setBounds({});
+            duplicatePluginLaneButton.setBounds({});
+            remapPluginLaneButton.setBounds({});
+            removePluginLaneButton.setBounds({});
             readAutomationButton.setBounds({});
             touchAutomationButton.setBounds({});
             latchAutomationButton.setBounds({});
             showVolumeAutomationButton.setBounds({});
             showPanAutomationButton.setBounds({});
+            showPluginAutomationButton.setBounds({});
             hideAutomationButton.setBounds({});
         }
 
-        if (! channelSectionBounds.isEmpty())
+        if (! channelSectionBounds.isEmpty() && channelSectionExpanded)
         {
             auto channelArea = channelSectionBounds.reduced(14, 16);
-            channelArea.removeFromTop(12);
+            channelArea.removeFromTop(24);
             processorLabel.setBounds(channelArea.removeFromTop(18));
             channelArea.removeFromTop(6);
-            slotOneLabel.setBounds(channelArea.removeFromTop(18));
+            auto slotOneHeader = channelArea.removeFromTop(18);
+            slotOneMeterBadge.setBounds(slotOneHeader.removeFromRight(58));
+            slotOneLabel.setBounds(slotOneHeader);
             auto slotOneButtons = channelArea.removeFromTop(24);
             loadSlotOneButton.setBounds(slotOneButtons.removeFromLeft(82).reduced(0, 1));
             slotOneButtons.removeFromLeft(6);
@@ -2154,7 +3351,9 @@ public:
             slotOneButtons.removeFromLeft(6);
             clearSlotOneButton.setBounds(slotOneButtons.removeFromLeft(62).reduced(0, 1));
             channelArea.removeFromTop(6);
-            slotTwoLabel.setBounds(channelArea.removeFromTop(18));
+            auto slotTwoHeader = channelArea.removeFromTop(18);
+            slotTwoMeterBadge.setBounds(slotTwoHeader.removeFromRight(58));
+            slotTwoLabel.setBounds(slotTwoHeader);
             auto slotTwoButtons = channelArea.removeFromTop(24);
             loadSlotTwoButton.setBounds(slotTwoButtons.removeFromLeft(82).reduced(0, 1));
             slotTwoButtons.removeFromLeft(6);
@@ -2173,6 +3372,8 @@ public:
             processorLabel.setBounds({});
             slotOneLabel.setBounds({});
             slotTwoLabel.setBounds({});
+            slotOneMeterBadge.setBounds({});
+            slotTwoMeterBadge.setBounds({});
             loadSlotOneButton.setBounds({});
             openSlotOneButton.setBounds({});
             clearSlotOneButton.setBounds({});
@@ -2195,6 +3396,12 @@ private:
                 : "Insert " + juce::String(slotIndex + 1) + ": empty";
 
         const auto& slot = track.inserts[static_cast<size_t>(slotIndex)];
+        if (slot.kind == ProcessorKind::superColliderFx && slot.superCollider.has_value())
+        {
+            const auto prefix = "Insert " + juce::String(slotIndex + 1);
+            return prefix + ": SC " + shortenForSidebar(slot.name, 24);
+        }
+
         if (slot.kind != ProcessorKind::audioUnit || slot.pluginIdentifier.isEmpty())
             return slotIndex == 0 && (track.kind == TrackKind::instrument || track.kind == TrackKind::midi)
                 ? "Instrument slot: empty"
@@ -2206,12 +3413,118 @@ private:
         return prefix + ": " + shortenForSidebar(slot.name, 28);
     }
 
+    void updateInsertMeterBadge(InsertRouteMeterComponent& badge, const TrackState& track, int slotIndex) const
+    {
+        if (slotIndex < 0 || slotIndex >= static_cast<int>(track.inserts.size()))
+        {
+            badge.setLevels(0.0f, 0.0f, false);
+            return;
+        }
+
+        const auto& insert = track.inserts[static_cast<size_t>(slotIndex)];
+        if (insert.kind != ProcessorKind::superColliderFx || ! insert.superCollider.has_value())
+        {
+            badge.setLevels(0.0f, 0.0f, false);
+            return;
+        }
+
+        const auto meterState = audioEngine.getHostedInsertMeterState(track.id, slotIndex);
+        badge.setLevels(meterState.has_value() ? meterState->inputLevel : 0.0f,
+                        meterState.has_value() ? meterState->outputLevel : 0.0f,
+                        meterState.has_value() && meterState->active && ! insert.bypassed);
+    }
+
     bool hasAudioUnitSlot(const TrackState& track, int slotIndex) const
     {
         return slotIndex >= 0
             && slotIndex < static_cast<int>(track.inserts.size())
             && track.inserts[static_cast<size_t>(slotIndex)].kind == ProcessorKind::audioUnit
             && track.inserts[static_cast<size_t>(slotIndex)].pluginIdentifier.isNotEmpty();
+    }
+
+    bool hasSuperColliderSlot(const TrackState& track, int slotIndex) const
+    {
+        return slotIndex >= 0
+            && slotIndex < static_cast<int>(track.inserts.size())
+            && track.inserts[static_cast<size_t>(slotIndex)].kind == ProcessorKind::superColliderFx
+            && track.inserts[static_cast<size_t>(slotIndex)].superCollider.has_value();
+    }
+
+    void configureInsertSlotRow(const TrackState& track,
+                                int slotIndex,
+                                TextButton& loadButton,
+                                TextButton& openButton,
+                                TextButton& clearButton) const
+    {
+        if (hasSuperColliderSlot(track, slotIndex))
+        {
+            loadButton.setButtonText("SC FX");
+            loadButton.setEnabled(false);
+            openButton.setButtonText("Live");
+            openButton.setEnabled(false);
+            clearButton.setButtonText("Reset");
+            clearButton.setEnabled(true);
+            return;
+        }
+
+        const auto choices = audioEngine.getAvailablePluginChoices(track, slotIndex);
+        loadButton.setButtonText("Load AU");
+        loadButton.setEnabled(! choices.empty());
+        openButton.setButtonText("Open");
+        openButton.setEnabled(hasAudioUnitSlot(track, slotIndex));
+        clearButton.setButtonText("Clear");
+        clearButton.setEnabled(hasAudioUnitSlot(track, slotIndex));
+    }
+
+    int findSuperColliderInsertSlot(const TrackState& track) const
+    {
+        for (int i = 0; i < static_cast<int>(track.inserts.size()); ++i)
+            if (track.inserts[static_cast<size_t>(i)].kind == ProcessorKind::superColliderFx
+                && track.inserts[static_cast<size_t>(i)].superCollider.has_value())
+                return i;
+
+        return -1;
+    }
+
+    juce::String describePluginAutomationLane(const PluginAutomationLane& lane) const
+    {
+        auto label = lane.displayName.isNotEmpty()
+            ? lane.displayName
+            : "S" + juce::String(lane.slotIndex + 1) + " / " + lane.parameterName;
+        if (label.isEmpty())
+            label = "Plugin lane";
+        return label;
+    }
+
+    AudioEngine::PluginParameterBindingStatus getPluginAutomationLaneStatus(const TrackState& track, const PluginAutomationLane& lane) const
+    {
+        return audioEngine.getTrackPluginParameterBindingStatus(track.id, lane.slotIndex, lane.parameterIndex);
+    }
+
+    PluginAutomationLane* getSelectedPluginAutomationLane(TrackState& track) const
+    {
+        if (track.selectedPluginAutomationLaneIndex < 0
+            || track.selectedPluginAutomationLaneIndex >= static_cast<int>(track.pluginAutomationLanes.size()))
+            return nullptr;
+
+        return &track.pluginAutomationLanes[static_cast<size_t>(track.selectedPluginAutomationLaneIndex)];
+    }
+
+    const PluginAutomationLane* getSelectedPluginAutomationLane(const TrackState& track) const
+    {
+        if (track.selectedPluginAutomationLaneIndex < 0
+            || track.selectedPluginAutomationLaneIndex >= static_cast<int>(track.pluginAutomationLanes.size()))
+            return nullptr;
+
+        return &track.pluginAutomationLanes[static_cast<size_t>(track.selectedPluginAutomationLaneIndex)];
+    }
+
+    float getSelectedPluginAutomationValue(const TrackState& track) const
+    {
+        if (const auto* pluginLane = getSelectedPluginAutomationLane(track))
+            return audioEngine.getTrackPluginParameterValue(track.id, pluginLane->slotIndex, pluginLane->parameterIndex);
+
+        return 0.5f;
     }
 
     void configureAutomationButton(TextButton& button, const String& text, AutomationLaneMode mode)
@@ -2260,6 +3573,7 @@ private:
     {
         showVolumeAutomationButton.setToggleState(track.visibleAutomationLane == AutomationLaneMode::volume && track.automationExpanded, dontSendNotification);
         showPanAutomationButton.setToggleState(track.visibleAutomationLane == AutomationLaneMode::pan && track.automationExpanded, dontSendNotification);
+        showPluginAutomationButton.setToggleState(track.visibleAutomationLane == AutomationLaneMode::plugin && track.automationExpanded, dontSendNotification);
         hideAutomationButton.setToggleState(! track.automationExpanded, dontSendNotification);
         readAutomationButton.setToggleState(track.automationWriteMode == AutomationWriteMode::read, dontSendNotification);
         touchAutomationButton.setToggleState(track.automationWriteMode == AutomationWriteMode::touch, dontSendNotification);
@@ -2274,6 +3588,10 @@ private:
         tintModeButton(readAutomationButton, track.automationWriteMode == AutomationWriteMode::read);
         tintModeButton(touchAutomationButton, track.automationWriteMode == AutomationWriteMode::touch);
         tintModeButton(latchAutomationButton, track.automationWriteMode == AutomationWriteMode::latch);
+        showPluginAutomationButton.setColour(TextButton::buttonColourId,
+                                             track.visibleAutomationLane == AutomationLaneMode::plugin && track.automationExpanded
+                                                 ? Colour::fromRGB(76, 96, 136)
+                                                 : Colour::fromRGB(54, 60, 74));
 
         if (! track.automationExpanded)
         {
@@ -2281,8 +3599,12 @@ private:
             return;
         }
 
-        const auto& points = track.visibleAutomationLane == AutomationLaneMode::pan ? track.panAutomation : track.volumeAutomation;
-        const auto fallback = track.visibleAutomationLane == AutomationLaneMode::pan ? track.mixer.pan : track.mixer.volume;
+        const auto* pluginLane = getSelectedPluginAutomationLane(track);
+        const auto& points = track.visibleAutomationLane == AutomationLaneMode::pan
+            ? track.panAutomation
+            : (track.visibleAutomationLane == AutomationLaneMode::plugin && pluginLane != nullptr ? pluginLane->points : track.volumeAutomation);
+        const auto fallback = track.visibleAutomationLane == AutomationLaneMode::pan ? track.mixer.pan
+            : (track.visibleAutomationLane == AutomationLaneMode::plugin ? getSelectedPluginAutomationValue(track) : track.mixer.volume);
         const auto value = interpolateAutomationDisplayValue(points, session.transport.playheadBeat, fallback);
         const auto suffix = track.automationWriteMode == AutomationWriteMode::read
             ? " / read"
@@ -2290,6 +3612,10 @@ private:
 
         if (track.visibleAutomationLane == AutomationLaneMode::pan)
             automationValueLabel.setText("Current pan: " + String(value, 2) + suffix, dontSendNotification);
+        else if (track.visibleAutomationLane == AutomationLaneMode::plugin)
+            automationValueLabel.setText(((pluginLane != nullptr) ? describePluginAutomationLane(*pluginLane) : "Plugin parameter")
+                                             + ": " + String(value, 2) + suffix,
+                                         dontSendNotification);
         else
             automationValueLabel.setText("Current volume: " + String(value, 2) + suffix, dontSendNotification);
     }
@@ -2343,16 +3669,29 @@ private:
         track.visibleAutomationLane = laneMode;
         track.automationExpanded = true;
 
-        auto& points = laneMode == AutomationLaneMode::pan ? track.panAutomation : track.volumeAutomation;
+        std::vector<AutomationPoint>* points = nullptr;
+        if (laneMode == AutomationLaneMode::pan)
+            points = &track.panAutomation;
+        else if (laneMode == AutomationLaneMode::plugin)
+        {
+            if (auto* pluginLane = getSelectedPluginAutomationLane(track))
+                points = &pluginLane->points;
+        }
+        else
+            points = &track.volumeAutomation;
+
+        if (points == nullptr)
+            return;
+
         const auto writeBeat = session.transport.playheadBeat;
         const auto clampedValue = laneMode == AutomationLaneMode::pan ? juce::jlimit(-1.0f, 1.0f, value) : juce::jlimit(0.0f, 1.0f, value);
 
-        auto nearby = std::find_if(points.begin(), points.end(), [writeBeat] (const auto& point)
+        auto nearby = std::find_if(points->begin(), points->end(), [writeBeat] (const auto& point)
         {
             return std::abs(point.beat - writeBeat) <= 0.15;
         });
 
-        if (nearby != points.end())
+        if (nearby != points->end())
         {
             nearby->beat = writeBeat;
             nearby->value = clampedValue;
@@ -2362,8 +3701,8 @@ private:
             AutomationPoint point;
             point.beat = writeBeat;
             point.value = clampedValue;
-            points.push_back(point);
-            std::sort(points.begin(), points.end(), [] (const auto& left, const auto& right) { return left.beat < right.beat; });
+            points->push_back(point);
+            std::sort(points->begin(), points->end(), [] (const auto& left, const auto& right) { return left.beat < right.beat; });
         }
 
         if (onAutomationEdited != nullptr)
@@ -2384,6 +3723,16 @@ private:
         g.drawText(title.toUpperCase(), bounds.reduced(14, 10).removeFromTop(14), Justification::centredLeft, false);
     }
 
+    void updateSectionToggleButtons()
+    {
+        clipSectionToggleButton.setButtonText(clipSectionExpanded ? "v" : ">");
+        trackSectionToggleButton.setButtonText(trackSectionExpanded ? "v" : ">");
+        channelSectionToggleButton.setButtonText(channelSectionExpanded ? "v" : ">");
+        clipSectionToggleButton.setTooltip(clipSectionExpanded ? "Collapse selected clip section" : "Expand selected clip section");
+        trackSectionToggleButton.setTooltip(trackSectionExpanded ? "Collapse track section" : "Expand track section");
+        channelSectionToggleButton.setTooltip(channelSectionExpanded ? "Collapse channel section" : "Expand channel section");
+    }
+
     SessionState& session;
     const SuperColliderBridge& superColliderBridge;
     AudioEngine& audioEngine;
@@ -2395,6 +3744,9 @@ private:
     std::function<void()> onAutomationLayoutChange;
     std::function<void()> onAutomationEdited;
     Label titleLabel;
+    TextButton clipSectionToggleButton;
+    TextButton trackSectionToggleButton;
+    TextButton channelSectionToggleButton;
     Label trackNameLabel;
     Label roleLabel;
     Label superColliderLabel;
@@ -2402,16 +3754,38 @@ private:
     Label audioRegionLabel;
     Label audioFileLabel;
     Label regionGainLabel;
+    Label pluginValueLabel;
+    Label pluginLaneNameLabel;
+    Label pluginLaneStatusLabel;
+    Label scInsertStatusLabel;
+    Label scInsertMetersLabel;
+    Label scInsertWetLabel;
+    Label scInsertTrimLabel;
     Label volumeLabel;
     Label panLabel;
     Label automationModeLabel;
     Label automationValueLabel;
     Label automationWriteLabel;
+    Label pluginParameterLabel;
+    Label pluginLaneActionsLabel;
+    ComboBox pluginParameterBox;
+    TextButton addPluginAutomationButton;
     Slider regionGainSlider;
+    Slider pluginValueSlider;
+    juce::TextEditor pluginLaneNameEditor;
+    TextButton movePluginLaneUpButton;
+    TextButton movePluginLaneDownButton;
+    TextButton duplicatePluginLaneButton;
+    TextButton remapPluginLaneButton;
+    TextButton removePluginLaneButton;
+    TextButton scInsertBypassButton;
+    Slider scInsertWetSlider;
+    Slider scInsertTrimSlider;
     TextButton assignAudioButton;
     TextButton clearAudioButton;
     TextButton showVolumeAutomationButton;
     TextButton showPanAutomationButton;
+    TextButton showPluginAutomationButton;
     TextButton hideAutomationButton;
     TextButton readAutomationButton;
     TextButton touchAutomationButton;
@@ -2421,14 +3795,19 @@ private:
     TextButton loadSlotOneButton;
     TextButton openSlotOneButton;
     TextButton clearSlotOneButton;
+    InsertRouteMeterComponent slotOneMeterBadge;
     TextButton loadSlotTwoButton;
     TextButton openSlotTwoButton;
     TextButton clearSlotTwoButton;
+    InsertRouteMeterComponent slotTwoMeterBadge;
     Slider volumeSlider;
     Slider panSlider;
     Rectangle<int> trackSectionBounds;
     Rectangle<int> clipSectionBounds;
     Rectangle<int> channelSectionBounds;
+    bool clipSectionExpanded { true };
+    bool trackSectionExpanded { true };
+    bool channelSectionExpanded { true };
 };
 
 class MixerStripComponent final : public Component
@@ -2713,6 +4092,114 @@ private:
     std::function<void(int, int)> onClose;
 };
 
+class MainComponent::LowerPaneSplitterComponent final : public juce::Component
+{
+public:
+    LowerPaneSplitterComponent(std::function<void(int)> onDragToUse,
+                               std::function<void()> onDoubleClickToUse)
+        : onDrag(std::move(onDragToUse)),
+          onDoubleClick(std::move(onDoubleClickToUse))
+    {
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(Colours::white.withAlpha(isMouseOverOrDragging() ? 0.14f : 0.08f));
+        g.fillRect(getLocalBounds());
+
+        auto grip = getLocalBounds().withSizeKeepingCentre(72, 4).toFloat();
+        g.setColour(Colours::white.withAlpha(isMouseOverOrDragging() ? 0.30f : 0.22f));
+        g.fillRoundedRectangle(grip, 2.0f);
+    }
+
+    void mouseDown(const juce::MouseEvent&) override
+    {
+        dragStartHeight = currentHeight;
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (onDrag != nullptr)
+            onDrag(dragStartHeight - event.getDistanceFromDragStartY());
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (onDoubleClick != nullptr)
+            onDoubleClick();
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override { repaint(); }
+    void mouseExit(const juce::MouseEvent&) override { repaint(); }
+    void mouseUp(const juce::MouseEvent&) override { repaint(); }
+
+    void setCurrentHeight(int height)
+    {
+        currentHeight = height;
+    }
+
+private:
+    std::function<void(int)> onDrag;
+    std::function<void()> onDoubleClick;
+    int currentHeight { 318 };
+    int dragStartHeight { 318 };
+};
+
+class MainComponent::RightSidebarSplitterComponent final : public juce::Component
+{
+public:
+    RightSidebarSplitterComponent(std::function<void(int)> onDragToUse,
+                                  std::function<void()> onDoubleClickToUse)
+        : onDrag(std::move(onDragToUse)),
+          onDoubleClick(std::move(onDoubleClickToUse))
+    {
+        setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(Colours::white.withAlpha(isMouseOverOrDragging() ? 0.14f : 0.08f));
+        g.fillRect(getLocalBounds());
+
+        auto grip = getLocalBounds().withSizeKeepingCentre(4, 72).toFloat();
+        g.setColour(Colours::white.withAlpha(isMouseOverOrDragging() ? 0.30f : 0.22f));
+        g.fillRoundedRectangle(grip, 2.0f);
+    }
+
+    void mouseDown(const juce::MouseEvent&) override
+    {
+        dragStartWidth = currentWidth;
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (onDrag != nullptr)
+            onDrag(dragStartWidth - event.getDistanceFromDragStartX());
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (onDoubleClick != nullptr)
+            onDoubleClick();
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override { repaint(); }
+    void mouseExit(const juce::MouseEvent&) override { repaint(); }
+    void mouseUp(const juce::MouseEvent&) override { repaint(); }
+
+    void setCurrentWidth(int width)
+    {
+        currentWidth = width;
+    }
+
+private:
+    std::function<void(int)> onDrag;
+    std::function<void()> onDoubleClick;
+    int currentWidth { 392 };
+    int dragStartWidth { 392 };
+};
+
 MainComponent::MainComponent()
     : audioEngine(session, superColliderBridge)
 {
@@ -2727,15 +4214,43 @@ MainComponent::MainComponent()
                                                      [this] { performUndo(); },
                                                      [this] { performRedo(); },
                                                      [this] { saveProject(false); },
-                                                     [this] { loadProject(); });
+                                                     [this] { loadProject(); },
+                                                     [this]
+                                                     {
+                                                         juce::PopupMenu menu;
+                                                         menu.addItem(1, "Audio Track");
+                                                         menu.addItem(2, "MIDI Track");
+                                                         menu.addItem(3, "Instrument Track");
+                                                         menu.addItem(4, "SuperCollider Render Track");
+                                                         menu.showMenuAsync(juce::PopupMenu::Options(),
+                                                                            [this] (int selectedItem)
+                                                                            {
+                                                                                switch (selectedItem)
+                                                                                {
+                                                                                    case 1: addTrack(TrackKind::audio); break;
+                                                                                    case 2: addTrack(TrackKind::midi); break;
+                                                                                    case 3: addTrack(TrackKind::instrument); break;
+                                                                                    case 4: addTrack(TrackKind::superColliderRender); break;
+                                                                                    default: break;
+                                                                                }
+                                                                            });
+                                                     },
+                                                     [this] { removeSelectedTrack(); });
     arrangeView = std::make_unique<ArrangeViewComponent>(session,
+                                                         session.layout.leftSidebarWidth,
                                                          [this] (int trackId) { selectTrack(trackId); },
                                                          [this] (int trackId, int regionIndex) { selectRegion(trackId, regionIndex); },
                                                          [this] { regionEdited(); },
                                                          [this] {
                                                              refreshAllViews(true);
                                                          },
-                                                         [this] { markSessionChanged(true); });
+                                                         [this] { markSessionChanged(true); },
+                                                         [this] (int width)
+                                                         {
+                                                             session.layout.leftSidebarWidth = width;
+                                                             sessionDirty = true;
+                                                             updateWindowState();
+                                                         });
     inspector = std::make_unique<InspectorComponent>(session,
                                                      superColliderBridge,
                                                      audioEngine,
@@ -2752,15 +4267,183 @@ MainComponent::MainComponent()
                                                      });
     mixer = std::make_unique<MixerComponent>(session, [this] { markSessionChanged(false); });
     pianoRoll = std::make_unique<PianoRollComponent>(session, [this] { regionEdited(); });
+    audioClipEditor = std::make_unique<AudioClipEditorComponent>(session);
+    lowerPaneSplitter = std::make_unique<LowerPaneSplitterComponent>([this] (int proposedHeight)
+    {
+        if (proposedHeight < 92)
+        {
+            lowerPaneExpanded = false;
+        }
+        else
+        {
+            lowerPaneExpanded = true;
+            lowerPaneHeight = juce::jlimit(160, juce::jmax(160, getHeight() - 180), proposedHeight);
+        }
+
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+    },
+    [this]
+    {
+        if (! lowerPaneExpanded || lowerPaneHeight <= 200)
+        {
+            lowerPaneExpanded = true;
+            lowerPaneHeight = 318;
+        }
+        else
+        {
+            lowerPaneHeight = 184;
+        }
+
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+    });
+    rightSidebarSplitter = std::make_unique<RightSidebarSplitterComponent>([this] (int proposedWidth)
+    {
+        rightSidebarWidth = juce::jlimit(36, juce::jmax(36, getWidth() - 420), proposedWidth);
+        syncLayoutStateToSession(true);
+        resized();
+    },
+    [this]
+    {
+        rightSidebarWidth = rightSidebarWidth <= 48 ? 392 : 36;
+        syncLayoutStateToSession(true);
+        resized();
+    });
     superColliderOverview = std::make_unique<SuperColliderOverviewComponent>(session, superColliderBridge, [this] { rebuildSynthDefs(); });
+
+    auto configureDockButton = [] (juce::TextButton& button)
+    {
+        button.setColour(juce::TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
+        button.setColour(juce::TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+    };
+    configureDockButton(editorPaneButton);
+    configureDockButton(mixerPaneButton);
+    configureDockButton(splitPaneButton);
+    configureDockButton(lowerPaneToggleButton);
+    configureDockButton(editorZoomOutButton);
+    configureDockButton(editorZoomInButton);
+    configureDockButton(editorPrimaryToolButton);
+    configureDockButton(editorSecondaryToolButton);
+    editorPaneButton.setButtonText("Editors");
+    mixerPaneButton.setButtonText("Mixer");
+    splitPaneButton.setButtonText("Split");
+    lowerPaneToggleButton.setButtonText("Hide");
+    editorZoomOutButton.setButtonText("-");
+    editorZoomInButton.setButtonText("+");
+    lowerPaneTitleLabel.setColour(juce::Label::textColourId, Colours::white.withAlpha(0.56f));
+    lowerPaneTitleLabel.setFont(FontOptions(12.0f, Font::bold));
+    lowerPaneTitleLabel.setJustificationType(juce::Justification::centredRight);
+    editorPaneButton.onClick = [this]
+    {
+        lowerPaneMode = LowerPaneMode::editor;
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+    };
+    mixerPaneButton.onClick = [this]
+    {
+        lowerPaneMode = LowerPaneMode::mixer;
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+    };
+    splitPaneButton.onClick = [this]
+    {
+        lowerPaneMode = LowerPaneMode::split;
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+    };
+    lowerPaneToggleButton.onClick = [this]
+    {
+        lowerPaneExpanded = ! lowerPaneExpanded;
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+    };
+    editorZoomOutButton.onClick = [this]
+    {
+        const auto* region = session.getSelectedRegion();
+        if (region == nullptr)
+            return;
+
+        if (region->kind == RegionKind::audio)
+            audioClipEditor->zoomOut();
+        else
+            pianoRoll->zoomOut();
+
+        markSessionChanged(false);
+    };
+    editorZoomInButton.onClick = [this]
+    {
+        const auto* region = session.getSelectedRegion();
+        if (region == nullptr)
+            return;
+
+        if (region->kind == RegionKind::audio)
+            audioClipEditor->zoomIn();
+        else
+            pianoRoll->zoomIn();
+
+        markSessionChanged(false);
+    };
+    editorPrimaryToolButton.onClick = [this]
+    {
+        const auto* region = session.getSelectedRegion();
+        if (region == nullptr)
+            return;
+
+        if (region->kind == RegionKind::audio)
+            session.layout.audioEditorTool = 0;
+        else
+            session.layout.midiEditorTool = 0;
+
+        markSessionChanged(false);
+    };
+    editorSecondaryToolButton.onClick = [this]
+    {
+        const auto* region = session.getSelectedRegion();
+        if (region == nullptr)
+            return;
+
+        if (region->kind == RegionKind::audio)
+            session.layout.audioEditorTool = 1;
+        else
+            session.layout.midiEditorTool = 1;
+
+        markSessionChanged(false);
+    };
 
     addAndMakeVisible(*transport);
     addAndMakeVisible(*arrangeView);
+    addAndMakeVisible(*rightSidebarSplitter);
     addAndMakeVisible(*inspector);
+    addAndMakeVisible(*lowerPaneSplitter);
+    addAndMakeVisible(editorPaneButton);
+    addAndMakeVisible(mixerPaneButton);
+    addAndMakeVisible(splitPaneButton);
+    addAndMakeVisible(lowerPaneToggleButton);
+    addAndMakeVisible(lowerPaneTitleLabel);
+    addAndMakeVisible(editorZoomOutButton);
+    addAndMakeVisible(editorZoomInButton);
+    addAndMakeVisible(editorPrimaryToolButton);
+    addAndMakeVisible(editorSecondaryToolButton);
     addAndMakeVisible(*pianoRoll);
+    addAndMakeVisible(*audioClipEditor);
     addAndMakeVisible(*mixer);
     addAndMakeVisible(*superColliderOverview);
 
+    restoreLayoutStateFromSession();
+    restoreSelectionSpecificLayoutState();
     setWantsKeyboardFocus(true);
     undoSnapshots.push_back(serialiseSessionToJson(session));
     updateWindowState();
@@ -2775,35 +4458,213 @@ MainComponent::~MainComponent()
     superColliderBridge.shutdown(session);
 }
 
+void MainComponent::restoreLayoutStateFromSession()
+{
+    rightSidebarWidth = session.layout.rightSidebarWidth;
+    lowerPaneHeight = session.layout.lowerPaneHeight;
+    lowerPaneExpanded = session.layout.lowerPaneExpanded;
+    lowerPaneMode = storedValueToLowerPaneMode(session.layout.lowerPaneModeValue);
+
+    if (arrangeView != nullptr)
+        arrangeView->setHeaderWidth(session.layout.leftSidebarWidth);
+}
+
+void MainComponent::syncLayoutStateToSession(bool markDirty)
+{
+    session.layout.rightSidebarWidth = rightSidebarWidth;
+    session.layout.lowerPaneHeight = lowerPaneHeight;
+    session.layout.lowerPaneExpanded = lowerPaneExpanded;
+    session.layout.lowerPaneModeValue = lowerPaneModeToStoredValue(lowerPaneMode);
+
+    if (markDirty)
+    {
+        sessionDirty = true;
+        updateWindowState();
+    }
+}
+
+void MainComponent::syncSelectionSpecificLayoutState(bool markDirty)
+{
+    const auto* region = session.getSelectedRegion();
+    if (region == nullptr)
+        return;
+
+    const auto isMidiSelection = region->kind == RegionKind::midi || region->kind == RegionKind::generated;
+    if (isMidiSelection)
+    {
+        session.layout.midiSelectionExpanded = lowerPaneExpanded;
+        session.layout.midiSelectionModeValue = lowerPaneModeToStoredValue(lowerPaneMode);
+    }
+    else if (region->kind == RegionKind::audio)
+    {
+        session.layout.audioSelectionExpanded = lowerPaneExpanded;
+        session.layout.audioSelectionModeValue = lowerPaneModeToStoredValue(lowerPaneMode);
+    }
+
+    if (markDirty)
+    {
+        sessionDirty = true;
+        updateWindowState();
+    }
+}
+
+void MainComponent::restoreSelectionSpecificLayoutState()
+{
+    const auto* region = session.getSelectedRegion();
+    if (region == nullptr)
+        return;
+
+    const auto isMidiSelection = region->kind == RegionKind::midi || region->kind == RegionKind::generated;
+    if (isMidiSelection)
+    {
+        lowerPaneExpanded = session.layout.midiSelectionExpanded;
+        lowerPaneMode = storedValueToLowerPaneMode(session.layout.midiSelectionModeValue);
+    }
+    else if (region->kind == RegionKind::audio)
+    {
+        lowerPaneExpanded = session.layout.audioSelectionExpanded;
+        lowerPaneMode = storedValueToLowerPaneMode(session.layout.audioSelectionModeValue);
+    }
+}
+
+void MainComponent::paint(juce::Graphics& g)
+{
+    juce::ignoreUnused(g);
+}
+
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
     transport->setBounds(area.removeFromTop(76));
 
     const auto* selectedRegion = session.getSelectedRegion();
-    const auto showPianoRoll = selectedRegion != nullptr
+    const auto selectedRegionIsMidi = selectedRegion != nullptr
         && (selectedRegion->kind == RegionKind::midi || selectedRegion->kind == RegionKind::generated);
+    const auto selectedRegionIsAudio = selectedRegion != nullptr && selectedRegion->kind == RegionKind::audio;
+    const auto showEditorDock = lowerPaneExpanded
+        && (lowerPaneMode == LowerPaneMode::editor || lowerPaneMode == LowerPaneMode::split);
+    const auto showMixerDock = lowerPaneExpanded
+        && (lowerPaneMode == LowerPaneMode::mixer || lowerPaneMode == LowerPaneMode::split);
+    const auto showMidiEditor = showEditorDock && selectedRegionIsMidi;
+    const auto showAudioEditor = showEditorDock && selectedRegionIsAudio;
+    const auto showEditorTools = showEditorDock && selectedRegion != nullptr;
 
-    auto bottom = area.removeFromBottom(showPianoRoll ? 350 : 250);
-    auto rightSidebar = area.removeFromRight(360);
+    const auto expandedDockHeight = juce::jlimit(160, juce::jmax(160, getHeight() - 180), lowerPaneHeight);
+    auto lowerDock = area.removeFromBottom(lowerPaneExpanded ? expandedDockHeight : 44);
+    if (lowerPaneExpanded)
+    {
+        lowerPaneSplitter->setVisible(true);
+        lowerPaneSplitter->setBounds(lowerDock.getX(), lowerDock.getY() - 8, lowerDock.getWidth(), 8);
+        lowerPaneSplitter->setCurrentHeight(lowerPaneHeight);
+    }
+    else
+    {
+        lowerPaneSplitter->setVisible(false);
+        lowerPaneSplitter->setBounds({});
+    }
+    auto dockHeader = lowerDock.removeFromTop(44).reduced(12, 8);
+    editorPaneButton.setBounds(dockHeader.removeFromLeft(94).reduced(0, 1));
+    dockHeader.removeFromLeft(8);
+    mixerPaneButton.setBounds(dockHeader.removeFromLeft(84).reduced(0, 1));
+    dockHeader.removeFromLeft(8);
+    splitPaneButton.setBounds(dockHeader.removeFromLeft(78).reduced(0, 1));
+    lowerPaneToggleButton.setBounds(dockHeader.removeFromRight(72).reduced(0, 1));
+    dockHeader.removeFromRight(8);
+    if (showEditorTools)
+    {
+        editorSecondaryToolButton.setVisible(true);
+        editorPrimaryToolButton.setVisible(true);
+        editorZoomInButton.setVisible(true);
+        editorZoomOutButton.setVisible(true);
 
-    superColliderOverview->setBounds(rightSidebar.removeFromTop(216).reduced(10, 8));
-    inspector->setBounds(rightSidebar.reduced(8));
+        editorSecondaryToolButton.setBounds(dockHeader.removeFromRight(86).reduced(0, 1));
+        dockHeader.removeFromRight(6);
+        editorPrimaryToolButton.setBounds(dockHeader.removeFromRight(86).reduced(0, 1));
+        dockHeader.removeFromRight(10);
+        editorZoomInButton.setBounds(dockHeader.removeFromRight(32).reduced(0, 1));
+        dockHeader.removeFromRight(4);
+        editorZoomOutButton.setBounds(dockHeader.removeFromRight(32).reduced(0, 1));
+        dockHeader.removeFromRight(10);
+    }
+    else
+    {
+        editorSecondaryToolButton.setVisible(false);
+        editorPrimaryToolButton.setVisible(false);
+        editorZoomInButton.setVisible(false);
+        editorZoomOutButton.setVisible(false);
+        editorSecondaryToolButton.setBounds({});
+        editorPrimaryToolButton.setBounds({});
+        editorZoomInButton.setBounds({});
+        editorZoomOutButton.setBounds({});
+    }
+
+    lowerPaneTitleLabel.setBounds(dockHeader);
+
+    const auto visibleRightSidebarWidth = juce::jlimit(36, juce::jmax(36, getWidth() - 420), rightSidebarWidth);
+    auto rightSidebar = area.removeFromRight(visibleRightSidebarWidth);
+    rightSidebarSplitter->setBounds(rightSidebar.getX() - 8, rightSidebar.getY(), 8, rightSidebar.getHeight());
+    rightSidebarSplitter->setCurrentWidth(rightSidebarWidth);
+
+    const auto rightSidebarCollapsed = visibleRightSidebarWidth <= 48;
+    if (rightSidebarCollapsed)
+    {
+        superColliderOverview->setVisible(false);
+        inspector->setVisible(false);
+        superColliderOverview->setBounds({});
+        inspector->setBounds({});
+    }
+    else
+    {
+        superColliderOverview->setVisible(true);
+        inspector->setVisible(true);
+        superColliderOverview->setBounds(rightSidebar.removeFromTop(198).reduced(12, 10));
+        rightSidebar.removeFromTop(6);
+        inspector->setBounds(rightSidebar.reduced(12, 8));
+    }
     arrangeView->setBounds(area);
 
-    if (showPianoRoll)
+    auto editorBounds = juce::Rectangle<int>();
+    auto mixerBounds = juce::Rectangle<int>();
+    if (showEditorDock && showMixerDock)
+    {
+        auto splitArea = lowerDock.reduced(6, 4);
+        editorBounds = splitArea.removeFromTop(juce::jmax(120, (splitArea.getHeight() * 3) / 5)).reduced(4, 2);
+        splitArea.removeFromTop(4);
+        mixerBounds = splitArea.reduced(0, 2);
+    }
+    else if (showEditorDock)
+    {
+        editorBounds = lowerDock.reduced(10, 6);
+    }
+    else if (showMixerDock)
+    {
+        mixerBounds = lowerDock.reduced(4, 0);
+    }
+
+    if (showMidiEditor)
     {
         pianoRoll->setVisible(true);
-        auto pianoArea = bottom.removeFromTop(194);
-        pianoRoll->setBounds(pianoArea.reduced(10, 6));
-        mixer->setBounds(bottom);
+        pianoRoll->setBounds(editorBounds);
+        audioClipEditor->setVisible(false);
+        audioClipEditor->setBounds({});
+    }
+    else if (showAudioEditor || showEditorDock)
+    {
+        audioClipEditor->setVisible(true);
+        audioClipEditor->setBounds(editorBounds);
+        pianoRoll->setVisible(false);
+        pianoRoll->setBounds({});
     }
     else
     {
         pianoRoll->setVisible(false);
+        audioClipEditor->setVisible(false);
         pianoRoll->setBounds({});
-        mixer->setBounds(bottom);
+        audioClipEditor->setBounds({});
     }
+
+    mixer->setVisible(showMixerDock);
+    mixer->setBounds(showMixerDock ? mixerBounds : juce::Rectangle<int>());
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key)
@@ -2833,8 +4694,31 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (key == juce::KeyPress('e', juce::ModifierKeys(), 0))
+    {
+        lowerPaneMode = LowerPaneMode::editor;
+        lowerPaneExpanded = ! lowerPaneExpanded ? true : lowerPaneExpanded;
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+        return true;
+    }
+
+    if (key == juce::KeyPress('x', juce::ModifierKeys(), 0))
+    {
+        lowerPaneMode = LowerPaneMode::mixer;
+        lowerPaneExpanded = ! lowerPaneExpanded ? true : lowerPaneExpanded;
+        syncLayoutStateToSession(true);
+        syncSelectionSpecificLayoutState(true);
+        updateWindowState();
+        resized();
+        return true;
+    }
+
     return Component::keyPressed(key);
 }
+
 
 void MainComponent::timerCallback()
 {
@@ -2923,8 +4807,11 @@ void MainComponent::selectTrack(int trackId)
 void MainComponent::selectRegion(int trackId, int regionIndex)
 {
     session.selectRegion(trackId, regionIndex);
+    restoreSelectionSpecificLayoutState();
+    syncLayoutStateToSession(false);
     refreshAllViews(true);
     resized();
+    updateWindowState();
 }
 
 void MainComponent::regionEdited()
@@ -2950,6 +4837,9 @@ void MainComponent::refreshAllViews(bool refreshLayout)
 
     if (pianoRoll != nullptr)
         pianoRoll->refresh();
+
+    if (audioClipEditor != nullptr)
+        audioClipEditor->refresh();
 
     if (mixer != nullptr)
         mixer->refresh();
@@ -3007,6 +4897,8 @@ void MainComponent::applySessionSnapshot(const juce::String& snapshotJson)
         audioEngine.reloadSessionState();
         superColliderBridge.refreshEnvironment(session);
         superColliderBridge.ensureServerRunning(session);
+        restoreLayoutStateFromSession();
+        restoreSelectionSpecificLayoutState();
     }
     suppressUndoCapture = false;
     refreshAllViews(true);
@@ -3048,6 +4940,7 @@ void MainComponent::performRedo()
 void MainComponent::saveProject(bool saveAs)
 {
     commitUndoSnapshotNow();
+    audioEngine.syncPluginStatesToSession();
 
     if (! saveAs && currentProjectPath.isNotEmpty())
     {
@@ -3085,6 +4978,73 @@ void MainComponent::saveProject(bool saveAs)
                                       });
 }
 
+void MainComponent::addTrack(TrackKind kind)
+{
+    const auto nextId = std::accumulate(session.tracks.begin(), session.tracks.end(), 1, [] (int current, const auto& track)
+    {
+        return juce::jmax(current, track.id + 1);
+    });
+
+    const auto ordinal = 1 + static_cast<int>(std::count_if(session.tracks.begin(), session.tracks.end(), [kind] (const auto& track)
+    {
+        return track.kind == kind;
+    }));
+
+    for (auto& track : session.tracks)
+        track.selected = false;
+
+    auto track = makeDefaultTrack(kind, nextId, ordinal);
+    track.selected = true;
+    session.tracks.push_back(std::move(track));
+    session.selectTrack(nextId);
+    session.selectRegion(nextId, 0);
+    audioEngine.reloadSessionState();
+    superColliderBridge.refreshEnvironment(session);
+    refreshAllViews(true);
+    markSessionChanged(true, true);
+    resized();
+    updateWindowState();
+}
+
+void MainComponent::removeSelectedTrack()
+{
+    if (session.tracks.size() <= 1)
+        return;
+
+    const auto selectedTrackId = session.selectedTrackId;
+    closeAllAudioUnitEditorWindows();
+
+    const auto removeIt = std::find_if(session.tracks.begin(), session.tracks.end(), [selectedTrackId] (const auto& track)
+    {
+        return track.id == selectedTrackId;
+    });
+
+    if (removeIt == session.tracks.end())
+        return;
+
+    const auto removedIndex = static_cast<int>(std::distance(session.tracks.begin(), removeIt));
+    session.tracks.erase(removeIt);
+
+    const auto replacementIndex = juce::jlimit(0, static_cast<int>(session.tracks.size()) - 1, removedIndex);
+    const auto replacementTrackId = session.tracks[static_cast<size_t>(replacementIndex)].id;
+    session.selectTrack(replacementTrackId);
+    if (! session.tracks[static_cast<size_t>(replacementIndex)].regions.empty())
+        session.selectRegion(replacementTrackId, 0);
+    else
+    {
+        session.selectedRegionTrackId = replacementTrackId;
+        session.selectedRegionIndex = -1;
+    }
+
+    audioEngine.reloadSessionState();
+    superColliderBridge.refreshEnvironment(session);
+    restoreSelectionSpecificLayoutState();
+    refreshAllViews(true);
+    markSessionChanged(true, true);
+    resized();
+    updateWindowState();
+}
+
 void MainComponent::loadProject()
 {
     activeProjectChooser = std::make_unique<juce::FileChooser>("Load project",
@@ -3115,6 +5075,8 @@ void MainComponent::loadProject()
                                           audioEngine.reloadSessionState();
                                           superColliderBridge.refreshEnvironment(session);
                                           superColliderBridge.ensureServerRunning(session);
+                                          restoreLayoutStateFromSession();
+                                          restoreSelectionSpecificLayoutState();
                                           refreshAllViews(true);
                                           resized();
                                           updateWindowState();
@@ -3129,7 +5091,58 @@ void MainComponent::updateWindowState()
     auto projectName = currentProjectPath.isNotEmpty()
         ? juce::File(currentProjectPath).getFileNameWithoutExtension()
         : juce::String("Untitled Project");
-    transport->setProjectStatus(projectName, sessionDirty || undoSnapshotPending, undoSnapshots.size() > 1, ! redoSnapshots.empty());
+    transport->setProjectStatus(projectName,
+                                sessionDirty || undoSnapshotPending,
+                                undoSnapshots.size() > 1,
+                                ! redoSnapshots.empty(),
+                                session.tracks.size() > 1);
+
+    auto tintDockButton = [] (juce::TextButton& button, bool active)
+    {
+        button.setColour(juce::TextButton::buttonColourId,
+                         active ? Colour::fromRGB(84, 98, 128) : Colour::fromRGB(54, 60, 74));
+    };
+    tintDockButton(editorPaneButton, lowerPaneMode == LowerPaneMode::editor);
+    tintDockButton(mixerPaneButton, lowerPaneMode == LowerPaneMode::mixer);
+    tintDockButton(splitPaneButton, lowerPaneMode == LowerPaneMode::split);
+    lowerPaneToggleButton.setButtonText(lowerPaneExpanded ? "Hide" : "Show");
+
+    const auto* region = session.getSelectedRegion();
+    juce::String editorLabel = "Editors hidden";
+    if (lowerPaneExpanded)
+    {
+        if (lowerPaneMode == LowerPaneMode::mixer)
+            editorLabel = "Mixer";
+        else if (lowerPaneMode == LowerPaneMode::split)
+            editorLabel = "Editors + Mixer";
+        else if (region == nullptr)
+            editorLabel = "Editor / no region selected";
+        else if (region->kind == RegionKind::audio)
+            editorLabel = "Audio File Editor / " + region->name;
+        else
+            editorLabel = "Piano Roll / " + region->name;
+    }
+
+    lowerPaneTitleLabel.setText(editorLabel, juce::dontSendNotification);
+
+    const auto showEditorTools = lowerPaneExpanded
+        && region != nullptr
+        && (lowerPaneMode == LowerPaneMode::editor || lowerPaneMode == LowerPaneMode::split);
+
+    editorZoomOutButton.setVisible(showEditorTools);
+    editorZoomInButton.setVisible(showEditorTools);
+    editorPrimaryToolButton.setVisible(showEditorTools);
+    editorSecondaryToolButton.setVisible(showEditorTools);
+
+    if (! showEditorTools)
+        return;
+
+    const auto isAudioEditor = region->kind == RegionKind::audio;
+    const auto activeTool = isAudioEditor ? session.layout.audioEditorTool : session.layout.midiEditorTool;
+    editorPrimaryToolButton.setButtonText(isAudioEditor ? "Pointer" : "Select");
+    editorSecondaryToolButton.setButtonText(isAudioEditor ? "Zoom" : "Draw");
+    tintDockButton(editorPrimaryToolButton, activeTool == 0);
+    tintDockButton(editorSecondaryToolButton, activeTool == 1);
 }
 
 void MainComponent::rebuildSynthDefs()
@@ -3173,21 +5186,56 @@ void MainComponent::assignAudioFileToSelectedRegion()
                                        if (! result.existsAsFile())
                                            return;
 
-                                       auto it = std::find_if(session.tracks.begin(), session.tracks.end(), [selectedTrackId] (const auto& candidate) {
-                                           return candidate.id == selectedTrackId;
-                                       });
-
-                                       if (it == session.tracks.end())
-                                           return;
-
-                                       if (selectedRegionIndex >= 0
-                                           && selectedRegionIndex < static_cast<int>(it->regions.size()))
+                                       auto applyImportedFile = [this, selectedTrackId, selectedRegionIndex, result] (bool useNaturalDuration)
                                        {
+                                           auto it = std::find_if(session.tracks.begin(), session.tracks.end(), [selectedTrackId] (const auto& candidate) {
+                                               return candidate.id == selectedTrackId;
+                                           });
+
+                                           if (it == session.tracks.end())
+                                               return;
+
+                                           if (selectedRegionIndex < 0
+                                               || selectedRegionIndex >= static_cast<int>(it->regions.size()))
+                                               return;
+
                                            auto* selectedRegion = &it->regions[static_cast<size_t>(selectedRegionIndex)];
                                            selectedRegion->sourceFilePath = result.getFullPathName();
                                            selectedRegion->sourceOffsetSeconds = 0.0;
+
+                                           if (useNaturalDuration)
+                                           {
+                                               if (const auto durationSeconds = readAudioFileDurationSeconds(result); durationSeconds.has_value())
+                                               {
+                                                   const auto beats = juce::jmax(0.25, (*durationSeconds * juce::jmax(1.0, session.transport.bpm)) / 60.0);
+                                                   selectedRegion->lengthInBeats = beats;
+                                               }
+                                           }
+
+                                           const auto maximumFade = juce::jmax(0.0, selectedRegion->lengthInBeats - 0.25);
+                                           selectedRegion->fadeInBeats = juce::jlimit(0.0, maximumFade, selectedRegion->fadeInBeats);
+                                           selectedRegion->fadeOutBeats = juce::jlimit(0.0, maximumFade, selectedRegion->fadeOutBeats);
                                            markSessionChanged(true, true);
+                                       };
+
+                                       if (const auto durationSeconds = readAudioFileDurationSeconds(result); durationSeconds.has_value())
+                                       {
+                                           juce::PopupMenu menu;
+                                           menu.addItem(1, "Keep current clip length");
+                                           menu.addItem(2, "Import at natural duration");
+
+                                           menu.showMenuAsync(juce::PopupMenu::Options(),
+                                                              [applyImportedFile] (int selectedItem)
+                                                              {
+                                                                  if (selectedItem == 1)
+                                                                      applyImportedFile(false);
+                                                                  else if (selectedItem == 2)
+                                                                      applyImportedFile(true);
+                                                              });
+                                           return;
                                        }
+
+                                       applyImportedFile(false);
                                    });
 }
 
@@ -3237,6 +5285,17 @@ void MainComponent::clearAudioUnitFromSelectedTrack(int slotIndex)
     auto* track = session.getSelectedTrack();
     if (track == nullptr)
         return;
+
+    if (slotIndex >= 0
+        && slotIndex < static_cast<int>(track->inserts.size())
+        && track->inserts[static_cast<size_t>(slotIndex)].kind == ProcessorKind::superColliderFx
+        && track->inserts[static_cast<size_t>(slotIndex)].superCollider.has_value())
+    {
+        audioEngine.setTrackSlotBypassed(track->id, slotIndex, false);
+        audioEngine.setTrackSuperColliderInsertMix(track->id, slotIndex, 1.0f, 0.0f);
+        markSessionChanged(true, true);
+        return;
+    }
 
     closeAudioUnitEditorWindow(track->id, slotIndex);
     audioEngine.clearTrackSlotPlugin(track->id, slotIndex);
