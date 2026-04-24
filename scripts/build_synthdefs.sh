@@ -47,11 +47,11 @@ check_sclang() {
   local probe_base
   local probe_file
   local probe
-  probe_base="$(mktemp "${TMPDIR:-/tmp}/logiclikedaw_sclang_probe_XXXXXX")"
+  probe_base="$(mktemp "${TMPDIR:-/tmp}/cigol_sclang_probe_XXXXXX")"
   probe_file="${probe_base}.scd"
   mv "$probe_base" "$probe_file"
   cat > "$probe_file" <<'EOF'
-"LOGICLIKEDAW_SCLANG_OK".postln;
+"CIGOL_SCLANG_OK".postln;
 0.exit;
 EOF
   probe="$("$SCLANG_BIN" "$probe_file" 2>&1 || true)"
@@ -63,7 +63,7 @@ EOF
     return 1
   fi
 
-  if ! grep -q "LOGICLIKEDAW_SCLANG_OK" <<<"$probe"; then
+  if ! grep -q "CIGOL_SCLANG_OK" <<<"$probe"; then
     echo "sclang did not complete the probe script:" >&2
     echo "$probe" >&2
     return 1
@@ -79,10 +79,10 @@ compile_one() {
   local tmpbase
   local tmpfile
   local logfile
-  tmpbase="$(mktemp "${TMPDIR:-/tmp}/logiclikedaw_synthdef_XXXXXX")"
+  tmpbase="$(mktemp "${TMPDIR:-/tmp}/cigol_synthdef_XXXXXX")"
   tmpfile="${tmpbase}.scd"
   mv "$tmpbase" "$tmpfile"
-  logfile="$(mktemp "${TMPDIR:-/tmp}/logiclikedaw_sclang_log_XXXXXX")"
+  logfile="$(mktemp "${TMPDIR:-/tmp}/cigol_sclang_log_XXXXXX")"
 
   cat > "$tmpfile" <<EOF
 ~logicLikeSynthDef = nil;

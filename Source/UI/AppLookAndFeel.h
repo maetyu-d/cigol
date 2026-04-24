@@ -2,7 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace logiclikedaw
+namespace cigol
 {
 class AppLookAndFeel final : public juce::LookAndFeel_V4
 {
@@ -17,4 +17,4 @@ public:
         setColour(juce::TextButton::buttonOnColourId, juce::Colour::fromRGB(255, 112, 74));
     }
 };
-} // namespace logiclikedaw
+} // namespace cigol

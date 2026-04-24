@@ -1,12 +1,12 @@
 #include "Application.h"
 
-namespace logiclikedaw
+namespace cigol
 {
 Application::~Application() = default;
 
 const juce::String Application::getApplicationName()
 {
-    return "LogicLikeDAW";
+    return "cigoL";
 }
 
 const juce::String Application::getApplicationVersion()
@@ -27,4 +27,4 @@ void Application::shutdown()
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     lookAndFeel.reset();
 }
-} // namespace logiclikedaw
+} // namespace cigol

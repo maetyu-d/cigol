@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 
-namespace logiclikedaw
+namespace cigol
 {
 enum class TrackKind
 {
@@ -13,6 +13,12 @@ enum class TrackKind
     midi,
     instrument,
     superColliderRender
+};
+
+enum class TrackChannelMode
+{
+    mono,
+    stereo
 };
 
 enum class RegionKind
@@ -143,6 +149,7 @@ struct TrackState
     juce::String name;
     juce::String role;
     TrackKind kind { TrackKind::audio };
+    TrackChannelMode channelMode { TrackChannelMode::stereo };
     juce::Colour colour;
     bool armed { false };
     bool muted { false };
@@ -224,9 +231,10 @@ juce::Result saveSessionToFile(const SessionState& session, const juce::File& fi
 juce::Result loadSessionFromFile(SessionState& session, const juce::File& file);
 
 juce::String toDisplayString(TrackKind kind);
+juce::String toDisplayString(TrackChannelMode mode);
 juce::String toDisplayString(ProcessorKind kind);
 juce::String toDisplayString(MidiGeneratorKind kind);
 juce::String toDisplayString(AutomationLaneMode mode);
 juce::String toDisplayString(AutomationWriteMode mode);
 juce::String toDisplayString(AutomationPoint::SegmentShape shape);
-} // namespace logiclikedaw
+} // namespace cigol

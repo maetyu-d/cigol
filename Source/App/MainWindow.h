@@ -2,7 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace logiclikedaw
+namespace cigol
 {
 class MainWindow final : public juce::DocumentWindow
 {
@@ -11,4 +11,4 @@ public:
 
     void closeButtonPressed() override;
 };
-} // namespace logiclikedaw
+} // namespace cigol

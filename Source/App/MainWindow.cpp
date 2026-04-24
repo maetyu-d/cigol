@@ -2,7 +2,7 @@
 
 #include "../UI/MainComponent.h"
 
-namespace logiclikedaw
+namespace cigol
 {
 MainWindow::MainWindow(juce::String name)
     : juce::DocumentWindow(std::move(name),
@@ -21,4 +21,4 @@ void MainWindow::closeButtonPressed()
 {
     juce::JUCEApplication::getInstance()->systemRequestedQuit();
 }
-} // namespace logiclikedaw
+} // namespace cigol

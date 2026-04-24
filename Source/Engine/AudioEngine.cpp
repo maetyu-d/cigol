@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace logiclikedaw
+namespace cigol
 {
 namespace
 {
@@ -777,6 +777,7 @@ void AudioEngine::syncTrackPlaybackStates()
         TrackPlaybackState state;
         state.trackId = track.id;
         state.kind = track.kind;
+        state.channelMode = track.channelMode;
         state.transportPlaying = session.transport.playing;
         state.muted = track.muted;
         state.hasSuperColliderMidiGenerator = track.midiGenerator.kind == MidiGeneratorKind::superCollider
@@ -915,7 +916,7 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
 
                 const auto sampleLeftA = region.clipData->samples.getSample(0, sampleIndex);
                 const auto sampleLeftB = region.clipData->samples.getSample(0, sampleIndex + 1);
-                const auto dryLeft = juce::jmap(alpha, sampleLeftA, sampleLeftB);
+                auto dryLeft = juce::jmap(alpha, sampleLeftA, sampleLeftB);
 
                 float dryRight = dryLeft;
                 if (region.clipData->samples.getNumChannels() > 1)
@@ -923,6 +924,13 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
                     const auto sampleRightA = region.clipData->samples.getSample(1, sampleIndex);
                     const auto sampleRightB = region.clipData->samples.getSample(1, sampleIndex + 1);
                     dryRight = juce::jmap(alpha, sampleRightA, sampleRightB);
+                }
+
+                if (track.channelMode == TrackChannelMode::mono)
+                {
+                    const auto monoSample = 0.5f * (dryLeft + dryRight);
+                    dryLeft = monoSample;
+                    dryRight = monoSample;
                 }
 
                 auto fadeGain = 1.0f;
@@ -1232,4 +1240,4 @@ void AudioEngine::updateMeters()
             : 0.0f;
     }
 }
-} // namespace logiclikedaw
+} // namespace cigol

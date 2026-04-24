@@ -8,7 +8,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_osc/juce_osc.h>
 
-namespace logiclikedaw
+namespace cigol
 {
 struct SuperColliderTrackSnapshot
 {
@@ -169,4 +169,4 @@ private:
     std::map<juce::String, SynthDefDescriptor> synthDefCatalog;
     bool lastTransportPlaying { false };
 };
-} // namespace logiclikedaw
+} // namespace cigol

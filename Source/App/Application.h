@@ -7,7 +7,7 @@
 
 #include <memory>
 
-namespace logiclikedaw
+namespace cigol
 {
 class Application final : public juce::JUCEApplication
 {
@@ -24,4 +24,4 @@ private:
     std::unique_ptr<AppLookAndFeel> lookAndFeel;
     std::unique_ptr<MainWindow> mainWindow;
 };
-} // namespace logiclikedaw
+} // namespace cigol

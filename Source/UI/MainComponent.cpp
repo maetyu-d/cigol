@@ -6,7 +6,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
-namespace logiclikedaw
+namespace cigol
 {
 namespace
 {
@@ -102,13 +102,14 @@ juce::Colour defaultTrackColourForKind(TrackKind kind, int ordinal)
     return juce::Colours::darkgrey;
 }
 
-TrackState makeDefaultTrack(TrackKind kind, int id, int ordinal)
+TrackState makeDefaultTrack(TrackKind kind, TrackChannelMode channelMode, int id, int ordinal)
 {
     TrackState track;
     track.id = id;
     track.name = defaultTrackNameForKind(kind, ordinal);
     track.role = defaultTrackRoleForKind(kind);
     track.kind = kind;
+    track.channelMode = kind == TrackKind::audio ? channelMode : TrackChannelMode::stereo;
     track.colour = defaultTrackColourForKind(kind, ordinal);
     track.mixer = { 0.78f, 0.0f, 0.0f };
     track.visibleAutomationLane = AutomationLaneMode::volume;
@@ -340,7 +341,8 @@ public:
                        std::function<void()> onSaveToUse,
                        std::function<void()> onLoadToUse,
                        std::function<void()> onAddTrackToUse,
-                       std::function<void()> onRemoveTrackToUse)
+                       std::function<void()> onRemoveTrackToUse,
+                       std::function<void()> onDuplicateTrackToUse)
         : state(stateToUse),
           engine(engineToUse),
           onUndo(std::move(onUndoToUse)),
@@ -348,10 +350,11 @@ public:
           onSave(std::move(onSaveToUse)),
           onLoad(std::move(onLoadToUse)),
           onAddTrack(std::move(onAddTrackToUse)),
-          onRemoveTrack(std::move(onRemoveTrackToUse))
+          onRemoveTrack(std::move(onRemoveTrackToUse)),
+          onDuplicateTrack(std::move(onDuplicateTrackToUse))
     {
         addAndMakeVisible(titleLabel);
-        titleLabel.setText("LogicLikeDAW", dontSendNotification);
+        titleLabel.setText("cigoL", dontSendNotification);
         titleLabel.setFont(FontOptions(24.0f, Font::bold));
 
         addAndMakeVisible(statusLabel);
@@ -380,6 +383,7 @@ public:
         configureButton(saveButton, "Save", [this] { if (onSave != nullptr) onSave(); });
         configureButton(loadButton, "Load", [this] { if (onLoad != nullptr) onLoad(); });
         configureButton(addTrackButton, "+ Track", [this] { if (onAddTrack != nullptr) onAddTrack(); });
+        configureButton(duplicateTrackButton, "Duplicate", [this] { if (onDuplicateTrack != nullptr) onDuplicateTrack(); });
         configureButton(removeTrackButton, "- Track", [this] { if (onRemoveTrack != nullptr) onRemoveTrack(); });
 
         addAndMakeVisible(tempoSlider);
@@ -407,12 +411,13 @@ public:
         projectLabel.setBounds(left.removeFromTop(20));
         statusLabel.setBounds(left);
 
-        auto utilityButtons = area.removeFromLeft(428);
+        auto utilityButtons = area.removeFromLeft(522);
         undoButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         redoButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         saveButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         loadButton.setBounds(utilityButtons.removeFromLeft(66).reduced(4));
         addTrackButton.setBounds(utilityButtons.removeFromLeft(82).reduced(4));
+        duplicateTrackButton.setBounds(utilityButtons.removeFromLeft(94).reduced(4));
         removeTrackButton.setBounds(utilityButtons.removeFromLeft(82).reduced(4));
 
         auto buttons = area.removeFromLeft(268);
@@ -425,12 +430,18 @@ public:
         positionLabel.setBounds(area.removeFromRight(190));
     }
 
-    void setProjectStatus(const String& projectName, const bool dirty, const bool canUndo, const bool canRedo, const bool canRemoveTrack)
+    void setProjectStatus(const String& projectName,
+                          const bool dirty,
+                          const bool canUndo,
+                          const bool canRedo,
+                          const bool canRemoveTrack,
+                          const bool canDuplicateTrack)
     {
         projectLabel.setText((dirty ? "* " : "") + projectName, dontSendNotification);
         undoButton.setEnabled(canUndo);
         redoButton.setEnabled(canRedo);
         removeTrackButton.setEnabled(canRemoveTrack);
+        duplicateTrackButton.setEnabled(canDuplicateTrack);
     }
 
 private:
@@ -469,6 +480,7 @@ private:
     std::function<void()> onLoad;
     std::function<void()> onAddTrack;
     std::function<void()> onRemoveTrack;
+    std::function<void()> onDuplicateTrack;
     Label titleLabel;
     Label statusLabel;
     Label projectLabel;
@@ -478,6 +490,7 @@ private:
     TextButton saveButton;
     TextButton loadButton;
     TextButton addTrackButton;
+    TextButton duplicateTrackButton;
     TextButton removeTrackButton;
     TextButton backButton;
     TextButton playButton;
@@ -500,7 +513,8 @@ public:
     {
         nameLabel.setText(track.name, dontSendNotification);
         nameLabel.setFont(FontOptions(15.0f, Font::bold));
-        roleLabel.setText(track.role + " / " + toDisplayString(track.kind), dontSendNotification);
+        const auto formatSuffix = track.kind == TrackKind::audio ? " / " + toDisplayString(track.channelMode) : juce::String();
+        roleLabel.setText(track.role + " / " + toDisplayString(track.kind) + formatSuffix, dontSendNotification);
         roleLabel.setColour(Label::textColourId, Colours::white.withAlpha(0.60f));
 
         addAndMakeVisible(nameLabel);
@@ -4215,27 +4229,22 @@ MainComponent::MainComponent()
                                                      [this] { performRedo(); },
                                                      [this] { saveProject(false); },
                                                      [this] { loadProject(); },
+                                                     [this] { openAddTrackDialog(); },
+                                                     [this] { removeSelectedTrack(); },
                                                      [this]
                                                      {
                                                          juce::PopupMenu menu;
-                                                         menu.addItem(1, "Audio Track");
-                                                         menu.addItem(2, "MIDI Track");
-                                                         menu.addItem(3, "Instrument Track");
-                                                         menu.addItem(4, "SuperCollider Render Track");
+                                                         menu.addItem(1, "Duplicate Track");
+                                                         menu.addItem(2, "Duplicate Track With Content");
                                                          menu.showMenuAsync(juce::PopupMenu::Options(),
                                                                             [this] (int selectedItem)
                                                                             {
-                                                                                switch (selectedItem)
-                                                                                {
-                                                                                    case 1: addTrack(TrackKind::audio); break;
-                                                                                    case 2: addTrack(TrackKind::midi); break;
-                                                                                    case 3: addTrack(TrackKind::instrument); break;
-                                                                                    case 4: addTrack(TrackKind::superColliderRender); break;
-                                                                                    default: break;
-                                                                                }
+                                                                                if (selectedItem == 1)
+                                                                                    duplicateSelectedTrack(false);
+                                                                                else if (selectedItem == 2)
+                                                                                    duplicateSelectedTrack(true);
                                                                             });
-                                                     },
-                                                     [this] { removeSelectedTrack(); });
+                                                     });
     arrangeView = std::make_unique<ArrangeViewComponent>(session,
                                                          session.layout.leftSidebarWidth,
                                                          [this] (int trackId) { selectTrack(trackId); },
@@ -4954,8 +4963,8 @@ void MainComponent::saveProject(bool saveAs)
     }
 
     activeProjectChooser = std::make_unique<juce::FileChooser>("Save project",
-                                                               juce::File(currentProjectPath.isNotEmpty() ? currentProjectPath : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("LogicLikeDAW.logicdaw")),
-                                                               "*.logicdaw");
+                                                               juce::File(currentProjectPath.isNotEmpty() ? currentProjectPath : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("cigoL.cigol")),
+                                                               "*.cigol");
     activeProjectChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
                                       [this] (const juce::FileChooser& chooser)
                                       {
@@ -4965,8 +4974,8 @@ void MainComponent::saveProject(bool saveAs)
                                               return;
 
                                           auto target = selected;
-                                          if (! target.hasFileExtension(".logicdaw"))
-                                              target = target.withFileExtension(".logicdaw");
+                                          if (! target.hasFileExtension(".cigol"))
+                                              target = target.withFileExtension(".cigol");
 
                                           const auto result = saveSessionToFile(session, target);
                                           if (result.wasOk())
@@ -4978,14 +4987,67 @@ void MainComponent::saveProject(bool saveAs)
                                       });
 }
 
-void MainComponent::addTrack(TrackKind kind)
+void MainComponent::openAddTrackDialog()
 {
-    const auto nextId = std::accumulate(session.tracks.begin(), session.tracks.end(), 1, [] (int current, const auto& track)
+    auto addCountItems = [] (juce::PopupMenu& menu, int baseId)
+    {
+        menu.addItem(baseId + 1, "1 Track");
+        menu.addItem(baseId + 2, "2 Tracks");
+        menu.addItem(baseId + 4, "4 Tracks");
+        menu.addItem(baseId + 8, "8 Tracks");
+    };
+
+    juce::PopupMenu audioStereoMenu;
+    juce::PopupMenu audioMonoMenu;
+    juce::PopupMenu midiMenu;
+    juce::PopupMenu instrumentMenu;
+    juce::PopupMenu superColliderMenu;
+    addCountItems(audioStereoMenu, 100);
+    addCountItems(audioMonoMenu, 200);
+    addCountItems(midiMenu, 300);
+    addCountItems(instrumentMenu, 400);
+    addCountItems(superColliderMenu, 500);
+
+    juce::PopupMenu audioMenu;
+    audioMenu.addSubMenu("Stereo", audioStereoMenu);
+    audioMenu.addSubMenu("Mono", audioMonoMenu);
+
+    juce::PopupMenu menu;
+    menu.addSubMenu("Audio Track", audioMenu);
+    menu.addSubMenu("MIDI Track", midiMenu);
+    menu.addSubMenu("Instrument Track", instrumentMenu);
+    menu.addSubMenu("SuperCollider Render Track", superColliderMenu);
+
+    menu.showMenuAsync(juce::PopupMenu::Options(),
+                       [this] (int selectedItem)
+                       {
+                           if (selectedItem <= 0)
+                               return;
+
+                           const auto group = selectedItem / 100;
+                           const auto count = juce::jlimit(1, 64, selectedItem % 100);
+
+                           switch (group)
+                           {
+                               case 1: addTracks(TrackKind::audio, TrackChannelMode::stereo, count); break;
+                               case 2: addTracks(TrackKind::audio, TrackChannelMode::mono, count); break;
+                               case 3: addTracks(TrackKind::midi, TrackChannelMode::stereo, count); break;
+                               case 4: addTracks(TrackKind::instrument, TrackChannelMode::stereo, count); break;
+                               case 5: addTracks(TrackKind::superColliderRender, TrackChannelMode::stereo, count); break;
+                               default: break;
+                           }
+                       });
+}
+
+void MainComponent::addTracks(TrackKind kind, TrackChannelMode channelMode, int count)
+{
+    const auto safeCount = juce::jlimit(1, 64, count);
+    auto nextId = std::accumulate(session.tracks.begin(), session.tracks.end(), 1, [] (int current, const auto& track)
     {
         return juce::jmax(current, track.id + 1);
     });
 
-    const auto ordinal = 1 + static_cast<int>(std::count_if(session.tracks.begin(), session.tracks.end(), [kind] (const auto& track)
+    auto ordinal = 1 + static_cast<int>(std::count_if(session.tracks.begin(), session.tracks.end(), [kind] (const auto& track)
     {
         return track.kind == kind;
     }));
@@ -4993,9 +5055,83 @@ void MainComponent::addTrack(TrackKind kind)
     for (auto& track : session.tracks)
         track.selected = false;
 
-    auto track = makeDefaultTrack(kind, nextId, ordinal);
-    track.selected = true;
-    session.tracks.push_back(std::move(track));
+    int lastTrackId = -1;
+    for (int i = 0; i < safeCount; ++i)
+    {
+        auto track = makeDefaultTrack(kind, channelMode, nextId, ordinal);
+        track.selected = false;
+        session.tracks.push_back(std::move(track));
+        lastTrackId = nextId;
+        ++nextId;
+        ++ordinal;
+    }
+
+    if (lastTrackId > 0)
+    {
+        session.selectTrack(lastTrackId);
+        session.selectRegion(lastTrackId, 0);
+    }
+
+    audioEngine.reloadSessionState();
+    superColliderBridge.refreshEnvironment(session);
+    refreshAllViews(true);
+    markSessionChanged(true, true);
+    resized();
+    updateWindowState();
+}
+
+void MainComponent::duplicateSelectedTrack(bool includeContent)
+{
+    auto* selectedTrack = session.getSelectedTrack();
+    if (selectedTrack == nullptr)
+        return;
+
+    const auto sourceTrackId = selectedTrack->id;
+    const auto nextId = std::accumulate(session.tracks.begin(), session.tracks.end(), 1, [] (int current, const auto& track)
+    {
+        return juce::jmax(current, track.id + 1);
+    });
+
+    auto duplicate = *selectedTrack;
+    duplicate.id = nextId;
+    duplicate.selected = false;
+    duplicate.name = selectedTrack->name + " Copy";
+    duplicate.mixer.meterLevel = 0.0f;
+    duplicate.automationGestureActive = false;
+    duplicate.automationLatchActive = false;
+    duplicate.automationWriteTarget = AutomationLaneMode::none;
+
+    if (! includeContent)
+    {
+        duplicate.volumeAutomation.clear();
+        duplicate.panAutomation.clear();
+        for (auto& lane : duplicate.pluginAutomationLanes)
+            lane.points.clear();
+        duplicate.regions.clear();
+
+        if (duplicate.kind == TrackKind::audio)
+            duplicate.regions.push_back({ "Audio Clip", duplicate.colour, RegionKind::audio, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+        else if (duplicate.kind == TrackKind::midi)
+            duplicate.regions.push_back({ "MIDI Clip", duplicate.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+        else if (duplicate.kind == TrackKind::instrument)
+            duplicate.regions.push_back({ "Instrument Clip", duplicate.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+        else if (duplicate.kind == TrackKind::superColliderRender)
+            duplicate.regions.push_back({ "Generated", duplicate.colour, RegionKind::generated, 1.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+    }
+
+    for (auto& track : session.tracks)
+        track.selected = false;
+
+    auto insertPosition = std::find_if(session.tracks.begin(), session.tracks.end(), [sourceTrackId] (const auto& track)
+    {
+        return track.id == sourceTrackId;
+    });
+
+    if (insertPosition == session.tracks.end())
+        return;
+
+    duplicate.selected = true;
+    session.tracks.insert(insertPosition + 1, std::move(duplicate));
     session.selectTrack(nextId);
     session.selectRegion(nextId, 0);
     audioEngine.reloadSessionState();
@@ -5049,7 +5185,7 @@ void MainComponent::loadProject()
 {
     activeProjectChooser = std::make_unique<juce::FileChooser>("Load project",
                                                                juce::File(currentProjectPath),
-                                                               "*.logicdaw");
+                                                               "*.cigol");
     activeProjectChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                       [this] (const juce::FileChooser& chooser)
                                       {
@@ -5090,12 +5226,13 @@ void MainComponent::updateWindowState()
 
     auto projectName = currentProjectPath.isNotEmpty()
         ? juce::File(currentProjectPath).getFileNameWithoutExtension()
-        : juce::String("Untitled Project");
+        : juce::String("Untitled cigoL Project");
     transport->setProjectStatus(projectName,
                                 sessionDirty || undoSnapshotPending,
                                 undoSnapshots.size() > 1,
                                 ! redoSnapshots.empty(),
-                                session.tracks.size() > 1);
+                                session.tracks.size() > 1,
+                                session.getSelectedTrack() != nullptr);
 
     auto tintDockButton = [] (juce::TextButton& button, bool active)
     {
@@ -5342,4 +5479,4 @@ void MainComponent::closeAllAudioUnitEditorWindows()
 {
     pluginEditorWindows.clear();
 }
-} // namespace logiclikedaw
+} // namespace cigol

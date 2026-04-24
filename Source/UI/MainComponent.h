@@ -7,7 +7,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace logiclikedaw
+namespace cigol
 {
 class MainComponent final : public juce::Component,
                             private juce::Timer
@@ -46,8 +46,10 @@ private:
     void loadProject();
     void updateWindowState();
     void rebuildSynthDefs();
-    void addTrack(TrackKind kind);
+    void openAddTrackDialog();
+    void addTracks(TrackKind kind, TrackChannelMode channelMode, int count);
     void removeSelectedTrack();
+    void duplicateSelectedTrack(bool includeContent);
     void assignAudioFileToSelectedRegion();
     void clearAudioFileFromSelectedRegion();
     void loadAudioUnitIntoSelectedTrack(int slotIndex);
@@ -106,4 +108,4 @@ private:
     int lowerPaneHeight { 318 };
     int rightSidebarWidth { 392 };
 };
-} // namespace logiclikedaw
+} // namespace cigol

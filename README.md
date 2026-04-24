@@ -1,4 +1,4 @@
-# LogicLikeDAW
+# cigoL
 
 A JUCE desktop DAW foundation aimed at a Logic Pro style workflow, with SuperCollider treated as a first-class engine feature rather than an afterthought.
 
@@ -73,7 +73,7 @@ cmake -S . -B build
 cmake --build build
 ```
 
-This repo will automatically use `/Users/user/Documents/Fabric/JUCE` when present. Otherwise, set `JUCE_DIR` or `LOGICLIKEDAW_JUCE_PATH` to a local JUCE checkout.
+This repo will automatically use `/Users/user/Documents/Fabric/JUCE` when present. Otherwise, set `JUCE_DIR` or `CIGOL_JUCE_PATH` to a local JUCE checkout.
 
 ## What Is Real Now
 

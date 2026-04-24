@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace logiclikedaw
+namespace cigol
 {
 namespace
 {
@@ -271,6 +271,7 @@ var trackToVar(const TrackState& track)
     object->setProperty("name", track.name);
     object->setProperty("role", track.role);
     object->setProperty("kind", enumToInt(track.kind));
+    object->setProperty("channelMode", enumToInt(track.channelMode));
     object->setProperty("colour", colourToVar(track.colour));
     object->setProperty("armed", track.armed);
     object->setProperty("muted", track.muted);
@@ -324,6 +325,7 @@ TrackState trackFromVar(const var& value)
         track.name = object->getProperty("name").toString();
         track.role = object->getProperty("role").toString();
         track.kind = intToEnum(object->getProperty("kind"), TrackKind::audio);
+        track.channelMode = intToEnum(object->getProperty("channelMode"), TrackChannelMode::stereo);
         track.colour = colourFromVar(object->getProperty("colour"), juce::Colours::grey);
         track.armed = static_cast<bool>(object->getProperty("armed"));
         track.muted = static_cast<bool>(object->getProperty("muted"));
@@ -435,7 +437,7 @@ SessionState createDemoSession()
     session.transport.playheadBeat = 5.25;
 
     session.tracks = {
-        { 1, "Lead Vox", "Audio Track", TrackKind::audio, Colour::fromRGB(236, 94, 90), false, false, false, true,
+        { 1, "Lead Vox", "Audio Track", TrackKind::audio, TrackChannelMode::stereo, Colour::fromRGB(236, 94, 90), false, false, false, true,
             { 0.84f, -0.05f, 0.0f },
             AutomationLaneMode::volume, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -462,7 +464,7 @@ SessionState createDemoSession()
             {},
             std::nullopt },
 
-        { 2, "Pulse Lab", "MIDI Track", TrackKind::midi, Colour::fromRGB(247, 184, 68), false, false, false, false,
+        { 2, "Pulse Lab", "MIDI Track", TrackKind::midi, TrackChannelMode::stereo, Colour::fromRGB(247, 184, 68), false, false, false, false,
             { 0.81f, 0.0f, 0.0f },
             AutomationLaneMode::volume, false, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -489,7 +491,7 @@ SessionState createDemoSession()
                 SuperColliderScriptState { "Euclid 7/12", "Pbind(\\\\degree, Pseq([0, 2, 4, 7], inf), \\\\dur, 0.25)", "", "Pdef(\\\\euclid)", "SC MIDI Clock -> Pulse Lab", "Generating MIDI into track input", true, false } },
             std::nullopt },
 
-        { 3, "Chroma Keys", "Instrument Track", TrackKind::instrument, Colour::fromRGB(67, 183, 148), false, false, false, false,
+        { 3, "Chroma Keys", "Instrument Track", TrackKind::instrument, TrackChannelMode::stereo, Colour::fromRGB(67, 183, 148), false, false, false, false,
             { 0.76f, -0.10f, 0.0f },
             AutomationLaneMode::pan, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -525,7 +527,7 @@ SessionState createDemoSession()
             {},
             std::nullopt },
 
-        { 4, "Nebula Scene", "SuperCollider Render", TrackKind::superColliderRender, juce::Colour::fromRGB(84, 155, 255), false, false, false, false,
+        { 4, "Nebula Scene", "SuperCollider Render", TrackKind::superColliderRender, TrackChannelMode::stereo, juce::Colour::fromRGB(84, 155, 255), false, false, false, false,
             { 0.70f, 0.18f, 0.0f },
             AutomationLaneMode::volume, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -548,7 +550,7 @@ SessionState createDemoSession()
             {},
             SuperColliderScriptState { "Nebula Scene", "Out.ar(0, GVerb.ar(Mix(SinOsc.ar([110, 220, 330], 0, 0.1))))", "nebulaScene", "SynthDef(\\\\nebulaScene)", "SC Render Bus A -> audio stem", "Ready for offline bounce or live preview", true, true } },
 
-        { 5, "FX Print", "Audio Track", TrackKind::audio, juce::Colour::fromRGB(172, 122, 255), false, true, false, false,
+        { 5, "FX Print", "Audio Track", TrackKind::audio, TrackChannelMode::stereo, juce::Colour::fromRGB(172, 122, 255), false, true, false, false,
             { 0.62f, 0.0f, 0.0f },
             AutomationLaneMode::volume, false, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -744,6 +746,17 @@ juce::String toDisplayString(TrackKind kind)
     return "Unknown";
 }
 
+juce::String toDisplayString(TrackChannelMode mode)
+{
+    switch (mode)
+    {
+        case TrackChannelMode::mono: return "Mono";
+        case TrackChannelMode::stereo: return "Stereo";
+    }
+
+    return "Stereo";
+}
+
 juce::String toDisplayString(ProcessorKind kind)
 {
     switch (kind)
@@ -803,4 +816,4 @@ juce::String toDisplayString(AutomationPoint::SegmentShape shape)
 
     return "Shape";
 }
-} // namespace logiclikedaw
+} // namespace cigol

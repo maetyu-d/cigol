@@ -11,7 +11,7 @@
 
 #include <set>
 
-namespace logiclikedaw
+namespace cigol
 {
 class AudioEngine final : public juce::AudioIODeviceCallback,
                           private juce::Timer
@@ -119,6 +119,7 @@ public:
 
         int trackId { 0 };
         TrackKind kind { TrackKind::audio };
+        TrackChannelMode channelMode { TrackChannelMode::stereo };
         bool transportPlaying { false };
         bool muted { false };
         bool hasSuperColliderMidiGenerator { false };
@@ -187,4 +188,4 @@ private:
     int currentBlockSize { 512 };
     bool pluginsScanned { false };
 };
-} // namespace logiclikedaw
+} // namespace cigol

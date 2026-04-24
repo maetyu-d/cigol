@@ -3,12 +3,12 @@
 #include <algorithm>
 #include <cmath>
 
-namespace logiclikedaw
+namespace cigol
 {
 namespace
 {
-constexpr auto sclangProbeMarker = "LOGICLIKEDAW_SCLANG_OK";
-constexpr auto synthDefCompileMarker = "LOGICLIKEDAW_SYNTHDEF_OK";
+constexpr auto sclangProbeMarker = "CIGOL_SCLANG_OK";
+constexpr auto synthDefCompileMarker = "CIGOL_SYNTHDEF_OK";
 
 juce::File findSuperColliderApp()
 {
@@ -948,7 +948,7 @@ bool SuperColliderProcessBridge::runSclangScript(const juce::String& scriptBody,
         return false;
 
     auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                        .getNonexistentChildFile("logiclikedaw-sc-run", ".scd", false);
+                        .getNonexistentChildFile("cigol-sc-run", ".scd", false);
 
     if (! tempFile.replaceWithText(scriptBody))
         return false;
@@ -1060,4 +1060,4 @@ void SuperColliderProcessBridge::syncGlobalTransportControls(const SessionState&
     oscSender.send("/c_set", runtimeState.tempoControlBus, static_cast<float>(session.transport.bpm));
     oscSender.send("/c_set", runtimeState.playheadControlBus, static_cast<float>(session.transport.playheadBeat));
 }
-} // namespace logiclikedaw
+} // namespace cigol
