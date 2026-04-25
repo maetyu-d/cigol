@@ -127,6 +127,35 @@ float midiRegionSample(const TrackKind kind,
     return static_cast<float>(std::sin(phase));
 }
 
+double beatForProjectSeconds(const SessionState& session,
+                             const double targetSeconds,
+                             const double lowBeat,
+                             const double highBeat)
+{
+    auto low = lowBeat;
+    auto high = juce::jmax(lowBeat, highBeat);
+
+    for (int i = 0; i < 32; ++i)
+    {
+        const auto mid = 0.5 * (low + high);
+        if (projectSecondsForBeat(session, mid) < targetSeconds)
+            low = mid;
+        else
+            high = mid;
+    }
+
+    return 0.5 * (low + high);
+}
+
+juce::AudioFormat* formatForRenderFile(juce::AudioFormatManager& manager, const juce::File& targetFile)
+{
+    const auto extension = targetFile.getFileExtension().toLowerCase();
+    if (extension == ".aiff" || extension == ".aif")
+        return manager.findFormatForFileExtension("aiff");
+
+    return manager.findFormatForFileExtension("wav");
+}
+
 class TrackGraphProcessor final : public juce::AudioProcessor
 {
 public:
@@ -752,6 +781,154 @@ void AudioEngine::reloadSessionState()
         refreshHostedPlugins();
     rebuildGraph(currentSampleRate, currentBlockSize);
     graph.prepareToPlay(currentSampleRate, currentBlockSize);
+}
+
+bool AudioEngine::renderOfflineToFile(const OfflineRenderRequest& request, const juce::File& targetFile, juce::String& message)
+{
+    const auto startBeat = juce::jmax(1.0, request.startBeat);
+    const auto endBeat = juce::jmax(startBeat + 0.001, request.endBeat);
+    if (targetFile == juce::File())
+    {
+        message = "No bounce destination was chosen.";
+        return false;
+    }
+
+    if (! targetFile.getParentDirectory().exists() && ! targetFile.getParentDirectory().createDirectory())
+    {
+        message = "Couldn't create the bounce folder.";
+        return false;
+    }
+
+    syncPluginStatesToSession();
+    syncTrackPlaybackStates();
+
+    const auto sampleRate = currentSampleRate > 0.0 ? currentSampleRate : 44100.0;
+    const auto blockSize = juce::jmax(128, currentBlockSize);
+    const auto startSeconds = projectSecondsForBeat(session, startBeat);
+    const auto endSeconds = projectSecondsForBeat(session, endBeat);
+    const auto durationSeconds = juce::jmax(0.001, endSeconds - startSeconds) + juce::jmax(0.0, request.tailSeconds);
+    const auto totalSamples = juce::jmax<int64_t>(1, static_cast<int64_t>(std::ceil(durationSeconds * sampleRate)));
+
+    std::unique_ptr<juce::OutputStream> outputStream(targetFile.createOutputStream());
+    if (outputStream == nullptr)
+    {
+        message = "Couldn't open the bounce file for writing.";
+        return false;
+    }
+
+    auto* format = formatForRenderFile(audioFormatManager, targetFile);
+    if (format == nullptr)
+    {
+        message = "That audio format isn't available right now.";
+        return false;
+    }
+
+    auto writerOptions = juce::AudioFormatWriterOptions()
+        .withSampleRate(sampleRate)
+        .withNumChannels(2)
+        .withBitsPerSample(24);
+    std::unique_ptr<juce::AudioFormatWriter> writer(format->createWriterFor(outputStream, writerOptions));
+    if (writer == nullptr)
+    {
+        message = "Couldn't start the bounce writer.";
+        return false;
+    }
+
+    std::vector<TrackPlaybackState> basePlaybackStates;
+    {
+        const juce::SpinLock::ScopedLockType lock(trackStateLock);
+        basePlaybackStates = trackPlaybackStates;
+    }
+
+    struct PluginStateSnapshot
+    {
+        juce::AudioPluginInstance* instance { nullptr };
+        juce::MemoryBlock state;
+    };
+
+    std::vector<PluginStateSnapshot> pluginSnapshots;
+    {
+        const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+        for (auto& runtime : hostedTrackRuntimes)
+            for (auto& slot : runtime.slots)
+                if (slot.instance != nullptr)
+                {
+                    pluginSnapshots.push_back({ slot.instance.get(), {} });
+                    slot.instance->getStateInformation(pluginSnapshots.back().state);
+                    slot.instance->reset();
+                    slot.instance->prepareToPlay(sampleRate, blockSize);
+                }
+    }
+
+    const auto savedMidiNotes = activeMidiNotesByTrack;
+    activeMidiNotesByTrack.clear();
+
+    juce::AudioBuffer<float> renderBuffer(2, blockSize);
+    juce::AudioBuffer<float> fullRenderBuffer(2, static_cast<int>(totalSamples));
+    fullRenderBuffer.clear();
+    auto renderedSamples = int64_t { 0 };
+    const auto beatSearchEnd = endBeat + juce::jmax(8.0, (durationSeconds * session.transport.bpm) / 60.0);
+    while (renderedSamples < totalSamples)
+    {
+        const auto samplesThisBlock = static_cast<int>(juce::jmin<int64_t>(blockSize, totalSamples - renderedSamples));
+        renderBuffer.setSize(2, samplesThisBlock, false, false, true);
+        renderBuffer.clear();
+
+        auto blockPlaybackStates = basePlaybackStates;
+        const auto blockStartSeconds = startSeconds + (static_cast<double>(renderedSamples) / sampleRate);
+        const auto blockStartBeat = beatForProjectSeconds(session, blockStartSeconds, startBeat, beatSearchEnd);
+        for (auto& track : blockPlaybackStates)
+        {
+            track.playheadBeat = blockStartBeat;
+            track.projectBpm = projectTempoAtBeat(session.transport, blockStartBeat);
+            if (const auto sourceTrack = std::find_if(session.tracks.begin(), session.tracks.end(),
+                                                      [&track] (const auto& candidate) { return candidate.id == track.trackId; });
+                sourceTrack != session.tracks.end())
+            {
+                track.bpm = trackTempoAtBeat(session, *sourceTrack, blockStartBeat);
+            }
+            track.transportPlaying = request.trackId.has_value() ? track.trackId == *request.trackId : true;
+        }
+
+        {
+            const juce::SpinLock::ScopedLockType lock(trackStateLock);
+            trackPlaybackStates = blockPlaybackStates;
+        }
+
+        renderAudioRegions(renderBuffer);
+        renderMidiRegions(renderBuffer);
+        for (int channel = 0; channel < fullRenderBuffer.getNumChannels(); ++channel)
+            fullRenderBuffer.copyFrom(channel, static_cast<int>(renderedSamples), renderBuffer, channel, 0, samplesThisBlock);
+        renderedSamples += samplesThisBlock;
+    }
+
+    if (request.normaliseOutput)
+    {
+        const auto peak = juce::jmax(fullRenderBuffer.getMagnitude(0, 0, fullRenderBuffer.getNumSamples()),
+                                     fullRenderBuffer.getMagnitude(1, 0, fullRenderBuffer.getNumSamples()));
+        if (peak > 0.00001f)
+            fullRenderBuffer.applyGain(0.96f / peak);
+    }
+
+    writer->writeFromAudioSampleBuffer(fullRenderBuffer, 0, fullRenderBuffer.getNumSamples());
+
+    {
+        const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
+        for (auto& snapshot : pluginSnapshots)
+            if (snapshot.instance != nullptr)
+            {
+                snapshot.instance->setStateInformation(snapshot.state.getData(), static_cast<int>(snapshot.state.getSize()));
+                snapshot.instance->reset();
+                snapshot.instance->prepareToPlay(currentSampleRate > 0.0 ? currentSampleRate : sampleRate,
+                                                 juce::jmax(128, currentBlockSize));
+            }
+    }
+
+    activeMidiNotesByTrack = savedMidiNotes;
+    reloadSessionState();
+
+    message = "Bounced audio to " + targetFile.getFileName();
+    return true;
 }
 
 void AudioEngine::timerCallback()

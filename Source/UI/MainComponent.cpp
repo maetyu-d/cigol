@@ -424,6 +424,16 @@ int trackIndexForId(const SessionState& session, int trackId)
     return -1;
 }
 
+double projectEndBeat(const SessionState& session)
+{
+    auto endBeat = 1.0;
+    for (const auto& track : session.tracks)
+        for (const auto& region : track.regions)
+            endBeat = juce::jmax(endBeat, region.startBeat + juce::jmax(0.25, region.lengthInBeats));
+
+    return endBeat;
+}
+
 int subtreeEndIndexExclusive(const SessionState& session, int trackIndex)
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(session.tracks.size()))
@@ -448,6 +458,9 @@ int findExpandedFolderInsertIndex(const SessionState& session, int folderTrackIn
 bool isTrackVisibleInSession(const SessionState& session, int trackIndex)
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(session.tracks.size()))
+        return false;
+
+    if (session.tracks[static_cast<size_t>(trackIndex)].hidden)
         return false;
 
     auto requiredDepth = session.tracks[static_cast<size_t>(trackIndex)].folderDepth;
@@ -536,6 +549,54 @@ MainComponent::LowerPaneMode storedValueToLowerPaneMode(int value)
         case 2: return MainComponent::LowerPaneMode::split;
         default: return MainComponent::LowerPaneMode::editor;
     }
+}
+
+juce::String bounceFileExtensionForFormatId(int formatId)
+{
+    return formatId == 2 ? ".aiff" : ".wav";
+}
+
+bool writeAudioFileWithFormat(const juce::File& sourceFile,
+                              const juce::File& targetFile,
+                              bool normaliseOutput)
+{
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(sourceFile));
+    if (reader == nullptr || reader->lengthInSamples <= 0)
+        return false;
+
+    auto* format = targetFile.hasFileExtension(".aiff") || targetFile.hasFileExtension(".aif")
+        ? formatManager.findFormatForFileExtension("aiff")
+        : formatManager.findFormatForFileExtension("wav");
+    if (format == nullptr)
+        return false;
+
+    juce::AudioBuffer<float> buffer(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+    reader->read(&buffer, 0, static_cast<int>(reader->lengthInSamples), 0, true, true);
+
+    if (normaliseOutput)
+    {
+        const auto peak = juce::jmax(buffer.getMagnitude(0, 0, buffer.getNumSamples()),
+                                     buffer.getNumChannels() > 1 ? buffer.getMagnitude(1, 0, buffer.getNumSamples()) : 0.0f);
+        if (peak > 0.00001f)
+            buffer.applyGain(0.96f / peak);
+    }
+
+    std::unique_ptr<juce::OutputStream> outputStream(targetFile.createOutputStream());
+    if (outputStream == nullptr)
+        return false;
+
+    auto writerOptions = juce::AudioFormatWriterOptions()
+        .withSampleRate(reader->sampleRate)
+        .withNumChannels(static_cast<int>(reader->numChannels))
+        .withBitsPerSample(24);
+    auto writer = format->createWriterFor(outputStream, writerOptions);
+    if (writer == nullptr)
+        return false;
+
+    return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
 }
 
 float interpolateAutomationDisplayValue(const std::vector<AutomationPoint>& points, const double beat, const float fallback)
@@ -6842,6 +6903,16 @@ private:
     int dragStartWidth { 392 };
 };
 
+struct MainComponent::BounceDialogSettings
+{
+    bool useCycleRange { false };
+    bool normaliseOutput { false };
+    bool includeSuperColliderStems { false };
+    double tailSeconds { 0.0 };
+    int formatId { 1 };
+    int sourceActionId { 1 };
+};
+
 MainComponent::MainComponent()
     : audioEngine(session, superColliderBridge)
 {
@@ -7667,6 +7738,139 @@ void MainComponent::menuNewProject()
 void MainComponent::menuOpenProject() { loadProject(); }
 void MainComponent::menuSaveProject() { saveProject(false); }
 void MainComponent::menuSaveProjectAs() { saveProject(true); }
+void MainComponent::menuBounceProjectOrSection() { bounceProjectOrTrackToAudioFile(false, session.transport.cycleEnabled); }
+void MainComponent::menuBounceCycleRange() { bounceProjectOrTrackToAudioFile(false, true); }
+void MainComponent::menuBounceSelectedTrackInPlace() { bounceSelectedTrackInPlace(); }
+void MainComponent::menuExportProjectMix() { bounceProjectOrTrackToAudioFile(false, false); }
+void MainComponent::menuExportSelectedTrackAudio() { bounceProjectOrTrackToAudioFile(true, false); }
+void MainComponent::menuExportStems()
+{
+    showBounceSettingsDialog(false, session.transport.cycleEnabled, false, true,
+                             [this] (const BounceDialogSettings& settings)
+                             {
+                                 auto baseDirectory = currentProjectPath.isNotEmpty()
+                                     ? juce::File(currentProjectPath).getParentDirectory()
+                                     : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+                                 activeFileChooser = std::make_unique<juce::FileChooser>("Choose a folder for stems",
+                                                                                         baseDirectory,
+                                                                                         "*");
+                                 activeFileChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                                                | juce::FileBrowserComponent::canSelectDirectories,
+                                                                [this, settings] (const juce::FileChooser& chooser)
+                                                                {
+                                                                    const auto selectedFolder = chooser.getResult();
+                                                                    activeFileChooser.reset();
+                                                                    if (selectedFolder == juce::File())
+                                                                        return;
+
+                                                                    auto targetFolder = selectedFolder;
+                                                                    targetFolder.createDirectory();
+
+                                                                    const auto wasPlaying = session.transport.playing;
+                                                                    const auto wasRecording = session.transport.recording;
+                                                                    session.transport.playing = false;
+                                                                    session.transport.recording = false;
+                                                                    audioEngine.syncPluginStatesToSession();
+                                                                    deviceManager.removeAudioCallback(&audioEngine);
+
+                                                                    auto stemCount = 0;
+                                                                    juce::StringArray failures;
+                                                                    const auto previousSelectedTrackId = session.selectedTrackId;
+                                                                    const auto previousSelectedRegionTrackId = session.selectedRegionTrackId;
+                                                                    const auto previousSelectedRegionIndex = session.selectedRegionIndex;
+                                                                    for (const auto& track : session.tracks)
+                                                                    {
+                                                                        if (track.kind == TrackKind::folder || track.hidden || track.kind == TrackKind::superColliderRender)
+                                                                            continue;
+
+                                                                        const auto target = targetFolder.getChildFile(juce::File::createLegalFileName(track.name)
+                                                                                                                      + bounceFileExtensionForFormatId(settings.formatId));
+                                                                        juce::String message;
+                                                                        const auto ok = audioEngine.renderOfflineToFile({ settings.useCycleRange && session.transport.cycleEnabled
+                                                                                                                             ? sanitisedCycleStartBeat(session.transport)
+                                                                                                                             : 1.0,
+                                                                                                                         settings.useCycleRange && session.transport.cycleEnabled
+                                                                                                                             ? sanitisedCycleEndBeat(session.transport)
+                                                                                                                             : projectEndBeat(session),
+                                                                                                                         track.id,
+                                                                                                                         settings.normaliseOutput,
+                                                                                                                         juce::jmax(0.0, settings.tailSeconds) },
+                                                                                                                        target,
+                                                                                                                        message);
+                                                                        if (ok)
+                                                                            ++stemCount;
+                                                                        else
+                                                                            failures.add(track.name);
+                                                                    }
+
+                                                                    if (settings.includeSuperColliderStems)
+                                                                    {
+                                                                        for (auto& track : session.tracks)
+                                                                        {
+                                                                            if (track.kind != TrackKind::superColliderRender || track.hidden)
+                                                                                continue;
+
+                                                                            for (int regionIndex = 0; regionIndex < static_cast<int>(track.regions.size()); ++regionIndex)
+                                                                            {
+                                                                                auto& region = track.regions[static_cast<size_t>(regionIndex)];
+                                                                                if (region.kind != RegionKind::generated || ! region.superColliderScript.has_value())
+                                                                                    continue;
+
+                                                                                session.selectRegion(track.id, regionIndex);
+                                                                                juce::File renderedFile;
+                                                                                juce::String message;
+                                                                                const auto renderLengthBeats = settings.useCycleRange && session.transport.cycleEnabled
+                                                                                    ? sanitisedCycleEndBeat(session.transport) - sanitisedCycleStartBeat(session.transport)
+                                                                                    : region.lengthInBeats;
+                                                                                const auto ok = superColliderBridge.renderScriptToAudio(session,
+                                                                                                                                      track.id,
+                                                                                                                                      renderLengthBeats,
+                                                                                                                                      renderedFile,
+                                                                                                                                      message);
+                                                                                if (! ok || ! renderedFile.existsAsFile())
+                                                                                {
+                                                                                    failures.add(track.name + " / " + region.name);
+                                                                                    continue;
+                                                                                }
+
+                                                                                auto stemTarget = targetFolder.getChildFile(juce::File::createLegalFileName(track.name + " - " + region.name)
+                                                                                                                            + bounceFileExtensionForFormatId(settings.formatId));
+                                                                                if (stemTarget.existsAsFile())
+                                                                                    stemTarget = targetFolder.getNonexistentChildFile(juce::File::createLegalFileName(track.name + " - " + region.name),
+                                                                                                                                     bounceFileExtensionForFormatId(settings.formatId),
+                                                                                                                                     false);
+
+                                                                                if (writeAudioFileWithFormat(renderedFile, stemTarget, settings.normaliseOutput))
+                                                                                    ++stemCount;
+                                                                                else
+                                                                                    failures.add(track.name + " / " + region.name);
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    session.selectedTrackId = previousSelectedTrackId;
+                                                                    session.selectedRegionTrackId = previousSelectedRegionTrackId;
+                                                                    session.selectedRegionIndex = previousSelectedRegionIndex;
+
+                                                                    deviceManager.addAudioCallback(&audioEngine);
+                                                                    session.transport.playing = wasPlaying;
+                                                                    session.transport.recording = wasRecording;
+                                                                    audioEngine.reloadSessionState();
+                                                                    refreshAllViews(false);
+                                                                    updateWindowState();
+
+                                                                    const auto resultText = failures.isEmpty()
+                                                                        ? "Saved " + juce::String(stemCount) + " stems to:\n" + targetFolder.getFullPathName()
+                                                                        : "Saved " + juce::String(stemCount) + " stems, but these tracks failed:\n" + failures.joinIntoString(", ");
+                                                                    juce::NativeMessageBox::showMessageBoxAsync(failures.isEmpty()
+                                                                                                                    ? juce::MessageBoxIconType::InfoIcon
+                                                                                                                    : juce::MessageBoxIconType::WarningIcon,
+                                                                                        failures.isEmpty() ? "Stems Exported" : "Stems Export Finished with Warnings",
+                                                                                        resultText,
+                                                                                        this);
+                                                                });
+                             });
+}
 void MainComponent::menuImportAudioToSelectedClip() { assignAudioFileToSelectedRegion(); }
 void MainComponent::menuUndo() { performUndo(); }
 void MainComponent::menuRedo() { performRedo(); }
@@ -7818,6 +8022,25 @@ void MainComponent::menuToggleInspector()
     resized();
 }
 
+void MainComponent::menuRevealHiddenTracks()
+{
+    auto changed = false;
+    for (auto& track : session.tracks)
+        if (track.hidden)
+        {
+            track.hidden = false;
+            changed = true;
+        }
+
+    if (! changed)
+        return;
+
+    refreshAllViews(true);
+    markSessionChanged(true, true);
+    resized();
+    updateWindowState();
+}
+
 void MainComponent::menuResetLayout()
 {
     session.layout.leftSidebarWidth = 240;
@@ -7948,6 +8171,10 @@ bool MainComponent::canPasteAction() const
 bool MainComponent::canDeleteAction() const { return session.getSelectedRegion() != nullptr || session.tracks.size() > 1; }
 bool MainComponent::canRemoveTrackAction() const { return session.tracks.size() > 1; }
 bool MainComponent::canDuplicateTrackAction() const { return session.getSelectedTrack() != nullptr; }
+bool MainComponent::hasHiddenTracks() const
+{
+    return std::any_of(session.tracks.begin(), session.tracks.end(), [] (const auto& track) { return track.hidden; });
+}
 bool MainComponent::isLowerPaneExpandedState() const { return lowerPaneExpanded; }
 bool MainComponent::isPlayingState() const { return session.transport.playing; }
 bool MainComponent::isRecordingState() const { return session.transport.recording; }
@@ -9289,6 +9516,266 @@ void MainComponent::loadProject()
                                           resized();
                                           updateWindowState();
                                       });
+}
+
+void MainComponent::showBounceSettingsDialog(bool,
+                                             bool forceCycleRange,
+                                             bool bounceInPlace,
+                                             bool stemsExport,
+                                             std::function<void(const BounceDialogSettings&)> onAcceptCallback)
+{
+    auto* alert = new juce::AlertWindow(stemsExport ? "Export Stems"
+                                                    : (bounceInPlace ? "Bounce In Place" : "Bounce Settings"),
+                                        stemsExport ? "Choose how the stems should be exported."
+                                                    : "Choose how this bounce should be created.",
+                                        juce::AlertWindow::NoIcon);
+    alert->addComboBox("range", { "Full Project", "Cycle Range" }, "Range");
+    alert->getComboBoxComponent("range")->setSelectedId(forceCycleRange ? 2 : 1);
+    alert->getComboBoxComponent("range")->setEnabled(session.transport.cycleEnabled);
+    alert->addComboBox("format", { "WAV", "AIFF" }, "Format");
+    alert->getComboBoxComponent("format")->setSelectedId(1);
+    if (bounceInPlace)
+        alert->getComboBoxComponent("format")->setEnabled(false);
+
+    alert->addTextEditor("tail", "0.0", "Tail (seconds)");
+    alert->addComboBox("normalise", { "Off", "On" }, "Normalise");
+    alert->getComboBoxComponent("normalise")->setSelectedId(1);
+    if (stemsExport)
+    {
+        alert->addComboBox("includeSc", { "No", "Yes" }, "Include SC Stems");
+        alert->getComboBoxComponent("includeSc")->setSelectedId(1);
+    }
+
+    if (bounceInPlace)
+    {
+        alert->addComboBox("sourceAction", { "Keep Source", "Hide Source", "Replace Source" }, "After Bounce");
+        alert->getComboBoxComponent("sourceAction")->setSelectedId(1);
+    }
+
+    alert->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->addButton(stemsExport ? "Export" : "Bounce", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->enterModalState(true, juce::ModalCallbackFunction::create([alert, onAccept = std::move(onAcceptCallback), forceCycleRange, this] (int result)
+    {
+        std::unique_ptr<juce::AlertWindow> holder(alert);
+        if (result != 1)
+            return;
+
+        BounceDialogSettings settings;
+        settings.useCycleRange = forceCycleRange
+            || (session.transport.cycleEnabled && holder->getComboBoxComponent("range") != nullptr
+                && holder->getComboBoxComponent("range")->getSelectedId() == 2);
+        settings.formatId = holder->getComboBoxComponent("format") != nullptr
+            ? holder->getComboBoxComponent("format")->getSelectedId()
+            : 1;
+        settings.normaliseOutput = holder->getComboBoxComponent("normalise") != nullptr
+            ? holder->getComboBoxComponent("normalise")->getSelectedId() == 2
+            : false;
+        settings.includeSuperColliderStems = holder->getComboBoxComponent("includeSc") != nullptr
+            ? holder->getComboBoxComponent("includeSc")->getSelectedId() == 2
+            : false;
+        settings.tailSeconds = juce::jmax(0.0, holder->getTextEditorContents("tail").getDoubleValue());
+        settings.sourceActionId = holder->getComboBoxComponent("sourceAction") != nullptr
+            ? holder->getComboBoxComponent("sourceAction")->getSelectedId()
+            : 1;
+
+        if (onAccept != nullptr)
+            onAccept(settings);
+    }));
+}
+
+void MainComponent::bounceProjectOrTrackToAudioFile(bool selectedTrackOnly, bool forceCycleRange)
+{
+    const auto* selectedTrack = session.getSelectedTrack();
+    if (selectedTrackOnly && (selectedTrack == nullptr || selectedTrack->kind == TrackKind::folder || selectedTrack->kind == TrackKind::superColliderRender))
+        return;
+
+    showBounceSettingsDialog(selectedTrackOnly, forceCycleRange, false, false,
+                             [this, selectedTrackOnly] (const BounceDialogSettings& settings)
+                             {
+                                 const auto* currentSelectedTrack = session.getSelectedTrack();
+                                 const auto startBeat = settings.useCycleRange && session.transport.cycleEnabled
+                                     ? sanitisedCycleStartBeat(session.transport)
+                                     : 1.0;
+                                 const auto endBeat = settings.useCycleRange && session.transport.cycleEnabled
+                                     ? sanitisedCycleEndBeat(session.transport)
+                                     : projectEndBeat(session);
+
+                                 const auto defaultDirectory = currentProjectPath.isNotEmpty()
+                                     ? juce::File(currentProjectPath).getParentDirectory()
+                                     : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+                                 const auto defaultBaseName = selectedTrackOnly && currentSelectedTrack != nullptr
+                                     ? juce::File::createLegalFileName(currentSelectedTrack->name + " Bounce")
+                                     : juce::File::createLegalFileName(settings.useCycleRange ? "Cycle Bounce" : "Project Bounce");
+                                 const auto extension = bounceFileExtensionForFormatId(settings.formatId);
+                                 activeFileChooser = std::make_unique<juce::FileChooser>(selectedTrackOnly ? "Export selected track" : "Bounce audio",
+                                                                                         defaultDirectory.getChildFile(defaultBaseName + extension),
+                                                                                         "*.wav;*.aiff;*.aif");
+                                 activeFileChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                                                                [this, startBeat, endBeat, selectedTrackOnly, settings, extension] (const juce::FileChooser& chooser)
+                                                                {
+                                                                    auto target = chooser.getResult();
+                                                                    activeFileChooser.reset();
+                                                                    if (target == juce::File())
+                                                                        return;
+
+                                                                    if (! target.hasFileExtension(".wav") && ! target.hasFileExtension(".aiff") && ! target.hasFileExtension(".aif"))
+                                                                        target = target.withFileExtension(extension);
+
+                                                                    const auto wasPlaying = session.transport.playing;
+                                                                    const auto wasRecording = session.transport.recording;
+                                                                    session.transport.playing = false;
+                                                                    session.transport.recording = false;
+                                                                    audioEngine.syncPluginStatesToSession();
+                                                                    deviceManager.removeAudioCallback(&audioEngine);
+
+                                                                    juce::String message;
+                                                                    const auto renderOk = audioEngine.renderOfflineToFile({ startBeat,
+                                                                                                                            endBeat,
+                                                                                                                            selectedTrackOnly ? std::optional<int>(session.selectedTrackId) : std::nullopt,
+                                                                                                                            settings.normaliseOutput,
+                                                                                                                            settings.tailSeconds },
+                                                                                                                           target,
+                                                                                                                           message);
+
+                                                                    deviceManager.addAudioCallback(&audioEngine);
+                                                                    session.transport.playing = wasPlaying;
+                                                                    session.transport.recording = wasRecording;
+                                                                    audioEngine.reloadSessionState();
+                                                                    refreshAllViews(false);
+                                                                    updateWindowState();
+
+                                                                    juce::NativeMessageBox::showMessageBoxAsync(renderOk ? juce::MessageBoxIconType::InfoIcon
+                                                                                                                          : juce::MessageBoxIconType::WarningIcon,
+                                                                                                renderOk ? "Bounce Complete" : "Bounce Failed",
+                                                                                                renderOk ? "Saved audio to:\n" + target.getFullPathName()
+                                                                                                         : message,
+                                                                                                this);
+                                                                });
+                             });
+}
+
+void MainComponent::bounceSelectedTrackInPlace()
+{
+    auto* selectedTrack = session.getSelectedTrack();
+    if (selectedTrack == nullptr || selectedTrack->kind == TrackKind::folder || selectedTrack->kind == TrackKind::superColliderRender)
+        return;
+
+    showBounceSettingsDialog(true, session.transport.cycleEnabled, true, false,
+                             [this] (const BounceDialogSettings& settings)
+                             {
+                                 auto* currentSelectedTrack = session.getSelectedTrack();
+                                 if (currentSelectedTrack == nullptr)
+                                     return;
+
+                                 const auto startBeat = settings.useCycleRange && session.transport.cycleEnabled
+                                     ? sanitisedCycleStartBeat(session.transport)
+                                     : 1.0;
+                                 const auto endBeat = settings.useCycleRange && session.transport.cycleEnabled
+                                     ? sanitisedCycleEndBeat(session.transport)
+                                     : projectEndBeat(session);
+                                 const auto sourceTrackId = currentSelectedTrack->id;
+                                 const auto sourceTrackName = currentSelectedTrack->name;
+                                 const auto sourceTrackColour = currentSelectedTrack->colour;
+                                 const auto sourceTrackDepth = currentSelectedTrack->folderDepth;
+
+                                 const auto bounceDirectory = currentProjectPath.isNotEmpty()
+                                     ? juce::File(currentProjectPath).getParentDirectory().getChildFile("Bounces")
+                                     : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("cigoL Bounces");
+                                 bounceDirectory.createDirectory();
+                                 auto target = bounceDirectory.getNonexistentChildFile(juce::File::createLegalFileName(sourceTrackName + " Bounce"), ".wav", false);
+
+                                 const auto wasPlaying = session.transport.playing;
+                                 const auto wasRecording = session.transport.recording;
+                                 session.transport.playing = false;
+                                 session.transport.recording = false;
+                                 audioEngine.syncPluginStatesToSession();
+                                 deviceManager.removeAudioCallback(&audioEngine);
+
+                                 juce::String message;
+                                 const auto renderOk = audioEngine.renderOfflineToFile({ startBeat,
+                                                                                         endBeat,
+                                                                                         sourceTrackId,
+                                                                                         settings.normaliseOutput,
+                                                                                         settings.tailSeconds },
+                                                                                        target,
+                                                                                        message);
+
+                                 deviceManager.addAudioCallback(&audioEngine);
+                                 session.transport.playing = wasPlaying;
+                                 session.transport.recording = wasRecording;
+
+                                 if (! renderOk)
+                                 {
+                                     audioEngine.reloadSessionState();
+                                     refreshAllViews(false);
+                                     updateWindowState();
+                                     juce::NativeMessageBox::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                                 "Bounce Failed",
+                                                                                 message,
+                                                                                 this);
+                                     return;
+                                 }
+
+                                 Region bouncedRegion { sourceTrackName + " Bounce",
+                                                        sourceTrackColour,
+                                                        RegionKind::audio,
+                                                        startBeat,
+                                                        endBeat - startBeat,
+                                                        target.getFullPathName(),
+                                                        0.0,
+                                                        0.0,
+                                                        0.0,
+                                                        1.0f,
+                                                        {},
+                                                        false,
+                                                        0.0,
+                                                        false,
+                                                        0.0,
+                                                        std::nullopt };
+                                 if (const auto duration = readAudioFileDurationSeconds(target))
+                                     bouncedRegion.sourceDurationSeconds = *duration;
+
+                                 const auto nextId = std::accumulate(session.tracks.begin(), session.tracks.end(), 1, [] (int current, const auto& candidate)
+                                 {
+                                     return juce::jmax(current, candidate.id + 1);
+                                 });
+                                 const auto ordinal = 1 + static_cast<int>(std::count_if(session.tracks.begin(), session.tracks.end(), [] (const auto& candidate)
+                                 {
+                                     return candidate.kind == TrackKind::audio;
+                                 }));
+
+                                 auto bouncedTrack = makeDefaultTrack(TrackKind::audio, TrackChannelMode::stereo, nextId, ordinal);
+                                 bouncedTrack.name = settings.sourceActionId == 3 ? sourceTrackName : sourceTrackName + " Bounce";
+                                 bouncedTrack.role = "Bounced Audio";
+                                 bouncedTrack.folderDepth = sourceTrackDepth;
+                                 bouncedTrack.selected = false;
+                                 bouncedTrack.regions.clear();
+                                 bouncedTrack.regions.push_back(std::move(bouncedRegion));
+
+                                 const auto sourceTrackIndex = trackIndexForId(session, sourceTrackId);
+                                 const auto insertIndex = sourceTrackIndex >= 0 ? sourceTrackIndex + 1 : static_cast<int>(session.tracks.size());
+                                 session.tracks.insert(session.tracks.begin() + insertIndex, std::move(bouncedTrack));
+
+                                 if (auto sourceIt = std::find_if(session.tracks.begin(), session.tracks.end(), [sourceTrackId] (const auto& track)
+                                     {
+                                         return track.id == sourceTrackId;
+                                     });
+                                     sourceIt != session.tracks.end() && settings.sourceActionId >= 2)
+                                 {
+                                     sourceIt->hidden = true;
+                                     sourceIt->selected = false;
+                                     if (settings.sourceActionId == 3)
+                                         sourceIt->muted = true;
+                                 }
+
+                                 session.selectTrack(nextId);
+                                 session.selectRegion(nextId, 0);
+                                 audioEngine.reloadSessionState();
+                                 refreshAllViews(true);
+                                 markSessionChanged(true, true);
+                                 resized();
+                                 updateWindowState();
+                             });
 }
 
 void MainComponent::updateWindowState()

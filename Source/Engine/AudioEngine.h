@@ -58,6 +58,15 @@ public:
         juce::String resolvedName;
     };
 
+    struct OfflineRenderRequest
+    {
+        double startBeat { 1.0 };
+        double endBeat { 1.0 };
+        std::optional<int> trackId;
+        bool normaliseOutput { false };
+        double tailSeconds { 0.0 };
+    };
+
     AudioEngine(SessionState& sessionToUse, SuperColliderBridge& bridgeToUse);
     ~AudioEngine() override;
 
@@ -90,6 +99,7 @@ public:
     std::unique_ptr<juce::AudioProcessorEditor> createTrackSlotEditor(int trackId, int slotIndex);
     void syncPluginStatesToSession();
     void reloadSessionState();
+    bool renderOfflineToFile(const OfflineRenderRequest& request, const juce::File& targetFile, juce::String& message);
     bool isWarpedAudioClipReady(const Region& region, double targetDurationSeconds);
     void prepareWarpedAudioClip(const Region& region, double targetDurationSeconds);
 

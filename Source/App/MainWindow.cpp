@@ -12,6 +12,12 @@ enum MenuItemIds
     menuOpenProject,
     menuSaveProject,
     menuSaveProjectAs,
+    menuBounceProjectOrSection,
+    menuBounceCycleRange,
+    menuBounceSelectedTrackInPlace,
+    menuExportProjectMix,
+    menuExportSelectedTrackAudio,
+    menuExportStems,
     menuImportAudioToSelectedClip,
     menuUndo,
     menuRedo,
@@ -42,6 +48,7 @@ enum MenuItemIds
     menuToggleLowerPane,
     menuToggleTrackList,
     menuToggleInspector,
+    menuRevealHiddenTracks,
     menuResetLayout,
     menuReturnToStart,
     menuPlayPause,
@@ -78,6 +85,22 @@ public:
                 menu.addItem(menuSaveProject, "Save\tCmd+S", main != nullptr);
                 menu.addItem(menuSaveProjectAs, "Save As...\tCmd+Shift+S", main != nullptr);
                 menu.addSeparator();
+                if (main != nullptr)
+                {
+                    juce::PopupMenu bounceMenu;
+                    bounceMenu.addItem(menuBounceProjectOrSection, "Project or Section...");
+                    bounceMenu.addItem(menuBounceCycleRange, "Cycle Range...");
+                    bounceMenu.addItem(menuBounceSelectedTrackInPlace, "Selected Track In Place", main->canDuplicateTrackAction());
+
+                    juce::PopupMenu exportMenu;
+                    exportMenu.addItem(menuExportProjectMix, "Project Mix...");
+                    exportMenu.addItem(menuExportSelectedTrackAudio, "Selected Track as Audio File...", main->canDuplicateTrackAction());
+                    exportMenu.addItem(menuExportStems, "Stems...");
+
+                    menu.addSubMenu("Bounce", bounceMenu);
+                    menu.addSubMenu("Export", exportMenu);
+                    menu.addSeparator();
+                }
                 menu.addItem(menuImportAudioToSelectedClip, "Import Audio to Selected Clip...", main != nullptr);
                 break;
 
@@ -132,6 +155,7 @@ public:
             case 4:
                 menu.addItem(menuToggleTrackList, "Show / Hide Track List\tCmd+T", main != nullptr);
                 menu.addItem(menuToggleInspector, "Show / Hide Inspector\tCmd+I", main != nullptr);
+                menu.addItem(menuRevealHiddenTracks, "Reveal Hidden Tracks", main != nullptr && main->hasHiddenTracks());
                 menu.addItem(menuResetLayout, "Reset Window Layout", main != nullptr);
                 break;
 
@@ -172,6 +196,12 @@ public:
             case menuOpenProject: main->menuOpenProject(); break;
             case menuSaveProject: main->menuSaveProject(); break;
             case menuSaveProjectAs: main->menuSaveProjectAs(); break;
+            case menuBounceProjectOrSection: main->menuBounceProjectOrSection(); break;
+            case menuBounceCycleRange: main->menuBounceCycleRange(); break;
+            case menuBounceSelectedTrackInPlace: main->menuBounceSelectedTrackInPlace(); break;
+            case menuExportProjectMix: main->menuExportProjectMix(); break;
+            case menuExportSelectedTrackAudio: main->menuExportSelectedTrackAudio(); break;
+            case menuExportStems: main->menuExportStems(); break;
             case menuImportAudioToSelectedClip: main->menuImportAudioToSelectedClip(); break;
             case menuUndo: main->menuUndo(); break;
             case menuRedo: main->menuRedo(); break;
@@ -202,6 +232,7 @@ public:
             case menuToggleLowerPane: main->menuToggleLowerPane(); break;
             case menuToggleTrackList: main->menuToggleTrackList(); break;
             case menuToggleInspector: main->menuToggleInspector(); break;
+            case menuRevealHiddenTracks: main->menuRevealHiddenTracks(); break;
             case menuResetLayout: main->menuResetLayout(); break;
             case menuReturnToStart: main->menuReturnToStart(); break;
             case menuPlayPause: main->menuPlayPause(); break;

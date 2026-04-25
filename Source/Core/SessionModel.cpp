@@ -324,6 +324,7 @@ var trackToVar(const TrackState& track)
     object->setProperty("armed", track.armed);
     object->setProperty("muted", track.muted);
     object->setProperty("solo", track.solo);
+    object->setProperty("hidden", track.hidden);
     object->setProperty("selected", track.selected);
     object->setProperty("volume", track.mixer.volume);
     object->setProperty("pan", track.mixer.pan);
@@ -385,6 +386,9 @@ TrackState trackFromVar(const var& value)
         track.armed = static_cast<bool>(object->getProperty("armed"));
         track.muted = static_cast<bool>(object->getProperty("muted"));
         track.solo = static_cast<bool>(object->getProperty("solo"));
+        track.hidden = object->hasProperty("hidden")
+            ? static_cast<bool>(object->getProperty("hidden"))
+            : false;
         track.selected = static_cast<bool>(object->getProperty("selected"));
         track.mixer.volume = static_cast<float>(static_cast<double>(object->getProperty("volume")));
         track.mixer.pan = static_cast<float>(static_cast<double>(object->getProperty("pan")));

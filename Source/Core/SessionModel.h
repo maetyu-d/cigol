@@ -212,6 +212,7 @@ struct TrackState
     MidiGeneratorState midiGenerator;
     std::optional<SuperColliderScriptState> renderScript;
     float tempoMultiplier { 1.0f };
+    bool hidden { false };
 };
 
 struct TransportState

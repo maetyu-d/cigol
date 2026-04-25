@@ -31,6 +31,12 @@ public:
     void menuOpenProject();
     void menuSaveProject();
     void menuSaveProjectAs();
+    void menuBounceProjectOrSection();
+    void menuBounceCycleRange();
+    void menuBounceSelectedTrackInPlace();
+    void menuExportProjectMix();
+    void menuExportSelectedTrackAudio();
+    void menuExportStems();
     void menuImportAudioToSelectedClip();
     void menuUndo();
     void menuRedo();
@@ -60,6 +66,7 @@ public:
     void menuToggleLowerPane();
     void menuToggleTrackList();
     void menuToggleInspector();
+    void menuRevealHiddenTracks();
     void menuResetLayout();
     void menuReturnToStart();
     void menuPlayPause();
@@ -78,6 +85,7 @@ public:
     bool canDeleteAction() const;
     bool canRemoveTrackAction() const;
     bool canDuplicateTrackAction() const;
+    bool hasHiddenTracks() const;
     bool isLowerPaneExpandedState() const;
     bool isPlayingState() const;
     bool isRecordingState() const;
@@ -106,6 +114,14 @@ private:
     void performRedo();
     void saveProject(bool saveAs);
     void loadProject();
+    struct BounceDialogSettings;
+    void showBounceSettingsDialog(bool selectedTrackOnly,
+                                  bool forceCycleRange,
+                                  bool bounceInPlace,
+                                  bool stemsExport,
+                                  std::function<void(const BounceDialogSettings&)> onAccept);
+    void bounceProjectOrTrackToAudioFile(bool selectedTrackOnly, bool forceCycleRange);
+    void bounceSelectedTrackInPlace();
     void updateWindowState();
     void rebuildSynthDefs();
     void openAddTrackDialog();
