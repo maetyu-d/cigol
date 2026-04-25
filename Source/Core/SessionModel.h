@@ -12,7 +12,8 @@ enum class TrackKind
     audio,
     midi,
     instrument,
-    superColliderRender
+    superColliderRender,
+    folder
 };
 
 enum class TrackChannelMode
@@ -62,6 +63,10 @@ struct Region
     double fadeOutBeats { 0.0 };
     float gain { 1.0f };
     std::vector<MidiNote> midiNotes;
+    bool warpEnabled { false };
+    double sourceDurationSeconds { 0.0 };
+    bool loopEnabled { false };
+    double loopLengthInBeats { 0.0 };
 };
 
 struct MixerState
@@ -99,6 +104,30 @@ enum class AutomationWriteMode
     read,
     touch,
     latch
+};
+
+enum class SnapMode
+{
+    bar,
+    beat,
+    division,
+    tick,
+    off
+};
+
+enum class DragMode
+{
+    overlap,
+    noOverlap,
+    shuffle
+};
+
+enum class NudgeMode
+{
+    bar,
+    beat,
+    division,
+    tick
 };
 
 struct SuperColliderScriptState
@@ -150,6 +179,8 @@ struct TrackState
     juce::String role;
     TrackKind kind { TrackKind::audio };
     TrackChannelMode channelMode { TrackChannelMode::stereo };
+    int folderDepth { 0 };
+    bool folderExpanded { true };
     juce::Colour colour;
     bool armed { false };
     bool muted { false };
@@ -170,15 +201,26 @@ struct TrackState
     std::vector<TrackProcessorState> inserts;
     MidiGeneratorState midiGenerator;
     std::optional<SuperColliderScriptState> renderScript;
+    float tempoMultiplier { 1.0f };
 };
 
 struct TransportState
 {
     bool playing { false };
     bool recording { false };
+    bool cycleEnabled { false };
+    double cycleStartBeat { 1.0 };
+    double cycleEndBeat { 9.0 };
+    int recordCyclePassCount { 0 };
+    bool metronomeEnabled { true };
+    bool countInEnabled { false };
     double bpm { 120.0 };
     double playheadBeat { 1.0 };
     double visibleBeats { 32.0 };
+    int timeSignatureNumerator { 4 };
+    int timeSignatureDenominator { 4 };
+    juce::String keySignature { "C Maj" };
+    std::vector<AutomationPoint> tempoAutomation;
 };
 
 struct RoutingState
@@ -193,6 +235,7 @@ struct EditorLayoutState
 {
     int leftSidebarWidth { 240 };
     int rightSidebarWidth { 392 };
+    bool superColliderOverviewVisible { false };
     int lowerPaneHeight { 318 };
     bool lowerPaneExpanded { true };
     int lowerPaneModeValue { 0 };
@@ -204,6 +247,9 @@ struct EditorLayoutState
     float midiEditorZoom { 1.0f };
     int audioEditorTool { 0 };
     int midiEditorTool { 0 };
+    SnapMode snapMode { SnapMode::division };
+    DragMode dragMode { DragMode::overlap };
+    NudgeMode nudgeMode { NudgeMode::beat };
 };
 
 struct SessionState
@@ -230,6 +276,12 @@ juce::Result deserialiseSessionFromJson(SessionState& session, const juce::Strin
 juce::Result saveSessionToFile(const SessionState& session, const juce::File& file);
 juce::Result loadSessionFromFile(SessionState& session, const juce::File& file);
 
+double projectTempoAtBeat(const TransportState& transport, double beat);
+double projectTempoAtBeat(const SessionState& session, double beat);
+double projectSecondsForBeat(const TransportState& transport, double beat);
+double projectSecondsForBeat(const SessionState& session, double beat);
+double trackTempoAtBeat(const SessionState& session, const TrackState& track, double beat);
+
 juce::String toDisplayString(TrackKind kind);
 juce::String toDisplayString(TrackChannelMode mode);
 juce::String toDisplayString(ProcessorKind kind);
@@ -237,4 +289,7 @@ juce::String toDisplayString(MidiGeneratorKind kind);
 juce::String toDisplayString(AutomationLaneMode mode);
 juce::String toDisplayString(AutomationWriteMode mode);
 juce::String toDisplayString(AutomationPoint::SegmentShape shape);
+juce::String toDisplayString(SnapMode mode);
+juce::String toDisplayString(DragMode mode);
+juce::String toDisplayString(NudgeMode mode);
 } // namespace cigol

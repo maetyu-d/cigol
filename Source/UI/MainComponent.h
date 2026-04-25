@@ -20,6 +20,54 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
 
+    void menuNewProject();
+    void menuOpenProject();
+    void menuSaveProject();
+    void menuSaveProjectAs();
+    void menuImportAudioToSelectedClip();
+    void menuUndo();
+    void menuRedo();
+    void menuCut();
+    void menuCopy();
+    void menuPaste();
+    void menuDelete();
+    void menuAddAudioTrack(bool mono, int count = 1);
+    void menuAddMidiTrack(int count = 1);
+    void menuAddInstrumentTrack(int count = 1);
+    void menuAddSuperColliderTrack(int count = 1);
+    void menuAddFolderTrack();
+    void menuDuplicateTrack();
+    void menuDuplicateTrackWithContent();
+    void menuRemoveTrack();
+    void menuRenameTrack();
+    void menuShowEditors();
+    void menuShowMixer();
+    void menuShowSplit();
+    void menuToggleLowerPane();
+    void menuToggleTrackList();
+    void menuToggleInspector();
+    void menuResetLayout();
+    void menuReturnToStart();
+    void menuPlayPause();
+    void menuStop();
+    void menuToggleRecord();
+    void menuToggleCycle();
+    void menuSetCycleLeftToPlayhead();
+    void menuSetCycleRightToPlayhead();
+    void menuAbout();
+    void menuShowShortcuts();
+    bool canUndoAction() const;
+    bool canRedoAction() const;
+    bool canCutAction() const;
+    bool canCopyAction() const;
+    bool canPasteAction() const;
+    bool canDeleteAction() const;
+    bool canRemoveTrackAction() const;
+    bool canDuplicateTrackAction() const;
+    bool isLowerPaneExpandedState() const;
+    bool isPlayingState() const;
+    bool isRecordingState() const;
+
     enum class LowerPaneMode
     {
         editor,
@@ -50,6 +98,12 @@ private:
     void addTracks(TrackKind kind, TrackChannelMode channelMode, int count);
     void removeSelectedTrack();
     void duplicateSelectedTrack(bool includeContent);
+    void deleteSelectedRegionOrTrack();
+    void copySelectedRegion();
+    void cutSelectedRegion();
+    void pasteCopiedRegion();
+    void duplicateSelectedRegion();
+    void toggleSelectedRegionLooping();
     void assignAudioFileToSelectedRegion();
     void clearAudioFileFromSelectedRegion();
     void loadAudioUnitIntoSelectedTrack(int slotIndex);
@@ -83,6 +137,9 @@ private:
     std::unique_ptr<LowerPaneSplitterComponent> lowerPaneSplitter;
     std::unique_ptr<RightSidebarSplitterComponent> rightSidebarSplitter;
     std::unique_ptr<SuperColliderOverviewComponent> superColliderOverview;
+    juce::Viewport rightSidebarViewport;
+    juce::Component rightSidebarContent;
+    juce::TextButton rightSidebarUtilityToggleButton;
     juce::TextButton editorPaneButton;
     juce::TextButton mixerPaneButton;
     juce::TextButton splitPaneButton;
@@ -98,6 +155,7 @@ private:
     std::vector<juce::String> undoSnapshots;
     std::vector<juce::String> redoSnapshots;
     juce::String currentProjectPath;
+    std::optional<Region> copiedRegion;
     bool sessionDirty { false };
     bool undoSnapshotPending { false };
     bool suppressUndoCapture { false };
@@ -107,5 +165,6 @@ private:
     LowerPaneMode lowerPaneMode { LowerPaneMode::editor };
     int lowerPaneHeight { 318 };
     int rightSidebarWidth { 392 };
+    bool superColliderOverviewVisible { false };
 };
 } // namespace cigol

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace cigol
 {
@@ -210,15 +211,19 @@ AudioEngine::AudioEngine(SessionState& sessionToUse, SuperColliderBridge& bridge
 #if JUCE_PLUGINHOST_AU
     pluginFormatManager.addFormat(std::make_unique<juce::AudioUnitPluginFormat>());
 #endif
-    scanForPlugins();
+    loadPluginCatalogCache();
     syncTrackPlaybackStates();
-    refreshHostedPlugins();
     startTimerHz(24);
     rebuildGraph(currentSampleRate, currentBlockSize);
+    if (getRememberedPluginCatalog().empty())
+        requestPluginRescan();
 }
 
 AudioEngine::~AudioEngine()
 {
+    joinCompletedPluginScanThread();
+    if (pluginScanThread.joinable())
+        pluginScanThread.join();
     graph.releaseResources();
 }
 
@@ -227,7 +232,6 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     currentSampleRate = device != nullptr ? device->getCurrentSampleRate() : 44100.0;
     currentBlockSize = device != nullptr ? device->getCurrentBufferSizeSamples() : 512;
     syncTrackPlaybackStates();
-    refreshHostedPlugins();
     rebuildGraph(currentSampleRate, currentBlockSize);
     graph.prepareToPlay(currentSampleRate, currentBlockSize);
 }
@@ -279,6 +283,8 @@ juce::String AudioEngine::getPluginHostingSummary() const
 {
     auto loadedSlots = 0;
     auto loadedSuperColliderBridgeSlots = 0;
+    auto rememberedChoices = 0;
+    auto activeChoices = 0;
 
     {
         const juce::SpinLock::ScopedLockType lock(pluginRuntimeLock);
@@ -292,20 +298,31 @@ juce::String AudioEngine::getPluginHostingSummary() const
             }
     }
 
-    return "AU choices " + juce::String(knownPluginList.getNumTypes())
+    {
+        const juce::ScopedLock lock(pluginCatalogLock);
+        rememberedChoices = static_cast<int>(cachedPluginDescriptions.size());
+        activeChoices = static_cast<int>(std::count_if(cachedPluginDescriptions.begin(),
+                                                       cachedPluginDescriptions.end(),
+                                                       [] (const auto& entry) { return entry.enabled; }));
+    }
+
+    return "AU choices " + juce::String(activeChoices) + " active / " + juce::String(rememberedChoices) + " remembered"
          + " | loaded slots " + juce::String(loadedSlots)
          + " | SC bridge slots " + juce::String(loadedSuperColliderBridgeSlots);
 }
 
 std::vector<AudioEngine::LoadablePluginChoice> AudioEngine::getAvailablePluginChoices(const TrackState& track, int slotIndex)
 {
-    scanForPlugins();
-
     std::vector<LoadablePluginChoice> choices;
     const auto wantsInstrument = slotIndex == 0 && (track.kind == TrackKind::instrument || track.kind == TrackKind::midi);
 
-    for (const auto& description : knownPluginList.getTypes())
+    const juce::ScopedLock lock(pluginCatalogLock);
+    for (const auto& entry : cachedPluginDescriptions)
     {
+        if (! entry.enabled)
+            continue;
+
+        const auto& description = entry.description;
         const auto isInstrument = description.isInstrument;
         if (wantsInstrument)
         {
@@ -322,6 +339,118 @@ std::vector<AudioEngine::LoadablePluginChoice> AudioEngine::getAvailablePluginCh
 
     std::sort(choices.begin(), choices.end(), [] (const auto& left, const auto& right) { return left.name < right.name; });
     return choices;
+}
+
+std::vector<AudioEngine::RememberedPluginEntry> AudioEngine::getRememberedPluginCatalog() const
+{
+    std::vector<RememberedPluginEntry> remembered;
+    const juce::ScopedLock lock(pluginCatalogLock);
+    remembered.reserve(cachedPluginDescriptions.size());
+    for (const auto& entry : cachedPluginDescriptions)
+        remembered.push_back({ entry.description.name,
+                               entry.description.fileOrIdentifier,
+                               entry.description.isInstrument,
+                               entry.enabled });
+
+    std::sort(remembered.begin(), remembered.end(), [] (const auto& left, const auto& right) { return left.name < right.name; });
+    return remembered;
+}
+
+juce::String AudioEngine::getPluginScanStatus() const
+{
+    const juce::ScopedLock lock(pluginCatalogLock);
+    return pluginScanStatus;
+}
+
+bool AudioEngine::isPluginScanInProgress() const
+{
+    return pluginScanInProgress.load();
+}
+
+void AudioEngine::requestPluginRescan()
+{
+    if (pluginScanInProgress.exchange(true))
+        return;
+
+    joinCompletedPluginScanThread();
+
+    {
+        const juce::ScopedLock lock(pluginCatalogLock);
+        pluginScanStatus = "Scanning plugins in the background...";
+        pendingPluginScanStatus.clear();
+        pendingCachedPluginDescriptions.clear();
+    }
+
+    pluginScanResultsPending = false;
+
+    pluginScanThread = std::thread([this]
+    {
+        std::map<juce::String, bool> enabledByIdentifier;
+        {
+            const juce::ScopedLock lock(pluginCatalogLock);
+            for (const auto& entry : cachedPluginDescriptions)
+                enabledByIdentifier[entry.description.fileOrIdentifier] = entry.enabled;
+        }
+
+        juce::AudioPluginFormatManager localFormatManager;
+#if JUCE_PLUGINHOST_AU
+        localFormatManager.addFormat(std::make_unique<juce::AudioUnitPluginFormat>());
+#endif
+
+        juce::KnownPluginList localKnownPluginList;
+        juce::OwnedArray<juce::PluginDescription> discoveredTypes;
+
+        for (auto* format : localFormatManager.getFormats())
+        {
+            const auto identifiers = format->searchPathsForPlugins({}, true, false);
+            for (const auto& identifier : identifiers)
+                localKnownPluginList.scanAndAddFile(identifier, true, discoveredTypes, *format);
+        }
+
+        std::vector<CachedPluginDescription> scannedDescriptions;
+        scannedDescriptions.reserve(static_cast<size_t>(localKnownPluginList.getNumTypes()));
+        for (const auto& description : localKnownPluginList.getTypes())
+        {
+            const auto enabledIt = enabledByIdentifier.find(description.fileOrIdentifier);
+            scannedDescriptions.push_back({ description,
+                                            enabledIt != enabledByIdentifier.end() ? enabledIt->second : true });
+        }
+
+        {
+            const juce::ScopedLock lock(pluginCatalogLock);
+            pendingCachedPluginDescriptions = std::move(scannedDescriptions);
+            pendingPluginScanStatus = "Remembered " + juce::String(pendingCachedPluginDescriptions.size()) + " plugins";
+        }
+
+        pluginScanResultsPending = true;
+        pluginScanInProgress = false;
+    });
+}
+
+bool AudioEngine::setPluginEnabled(const juce::String& pluginIdentifier, bool enabled)
+{
+    auto changed = false;
+    {
+        const juce::ScopedLock lock(pluginCatalogLock);
+        for (auto& entry : cachedPluginDescriptions)
+            if (entry.description.fileOrIdentifier == pluginIdentifier)
+            {
+                if (entry.enabled != enabled)
+                {
+                    entry.enabled = enabled;
+                    pluginScanStatus = "Remembered " + juce::String(cachedPluginDescriptions.size()) + " plugins";
+                    changed = true;
+                }
+                break;
+            }
+    }
+
+    if (! changed)
+        return false;
+
+    savePluginCatalogCache();
+    refreshHostedPlugins();
+    return true;
 }
 
 std::vector<AudioEngine::AutomatableParameterChoice> AudioEngine::getAutomatableParameters(int trackId) const
@@ -610,13 +739,38 @@ void AudioEngine::syncPluginStatesToSession()
 void AudioEngine::reloadSessionState()
 {
     syncTrackPlaybackStates();
-    refreshHostedPlugins();
+    for (const auto& track : session.tracks)
+        for (const auto& region : track.regions)
+            if (region.kind == RegionKind::audio && region.warpEnabled && region.sourceFilePath.isNotEmpty())
+            {
+                const auto targetDurationSeconds = juce::jmax(0.001,
+                                                              projectSecondsForBeat(session, region.startBeat + region.lengthInBeats)
+                                                                  - projectSecondsForBeat(session, region.startBeat));
+                prepareWarpedAudioClip(region, targetDurationSeconds);
+            }
+    if (! deferredPluginInitialisationPending)
+        refreshHostedPlugins();
     rebuildGraph(currentSampleRate, currentBlockSize);
     graph.prepareToPlay(currentSampleRate, currentBlockSize);
 }
 
 void AudioEngine::timerCallback()
 {
+    if (pluginScanResultsPending.exchange(false))
+    {
+        joinCompletedPluginScanThread();
+        commitPendingPluginScanResults();
+        refreshHostedPlugins();
+    }
+
+    if (deferredPluginInitialisationPending)
+    {
+        deferredPluginInitialisationPending = false;
+        refreshHostedPlugins();
+        rebuildGraph(currentSampleRate, currentBlockSize);
+        graph.prepareToPlay(currentSampleRate, currentBlockSize);
+    }
+
     syncTrackPlaybackStates();
     updateMeters();
 
@@ -630,37 +784,127 @@ void AudioEngine::timerCallback()
     superColliderBridge.updateHostedInsertRouting(session, routingSnapshots);
 }
 
-void AudioEngine::scanForPlugins()
+void AudioEngine::loadPluginCatalogCache()
 {
-    if (pluginsScanned)
-        return;
+    juce::String loadedStatus = "Plugin library idle";
+    std::vector<CachedPluginDescription> loadedDescriptions;
 
-    juce::OwnedArray<juce::PluginDescription> discoveredTypes;
+    const auto cacheFile = getPluginCatalogCacheFile();
+    if (cacheFile.existsAsFile())
+        if (const auto parsed = juce::JSON::parse(cacheFile.loadFileAsString()); ! parsed.isVoid())
+            if (auto* object = parsed.getDynamicObject())
+            {
+                if (auto* array = object->getProperty("plugins").getArray())
+                    for (const auto& pluginValue : *array)
+                        if (auto* pluginObject = pluginValue.getDynamicObject())
+                        {
+                            const auto xmlText = pluginObject->getProperty("descriptionXml").toString();
+                            if (xmlText.isEmpty())
+                                continue;
 
-    for (auto* format : pluginFormatManager.getFormats())
+                            std::unique_ptr<juce::XmlElement> xml(juce::XmlDocument::parse(xmlText));
+                            if (xml == nullptr)
+                                continue;
+
+                            juce::PluginDescription description;
+                            if (! description.loadFromXml(*xml))
+                                continue;
+
+                            loadedDescriptions.push_back({ description,
+                                                           ! pluginObject->hasProperty("enabled")
+                                                               || static_cast<bool>(pluginObject->getProperty("enabled")) });
+                        }
+
+                if (object->hasProperty("status"))
+                    loadedStatus = object->getProperty("status").toString();
+            }
+
+    const juce::ScopedLock lock(pluginCatalogLock);
+    cachedPluginDescriptions = std::move(loadedDescriptions);
+    pluginScanStatus = cachedPluginDescriptions.empty()
+        ? "No remembered plugins yet. Run a rescan."
+        : loadedStatus;
+}
+
+void AudioEngine::savePluginCatalogCache() const
+{
+    juce::Array<juce::var> plugins;
+    juce::String statusToSave;
     {
-        const auto identifiers = format->searchPathsForPlugins({}, true, false);
-
-        for (const auto& identifier : identifiers)
-            knownPluginList.scanAndAddFile(identifier, true, discoveredTypes, *format);
+        const juce::ScopedLock lock(pluginCatalogLock);
+        statusToSave = pluginScanStatus;
+        for (const auto& entry : cachedPluginDescriptions)
+        {
+            auto pluginObject = std::make_unique<juce::DynamicObject>();
+            pluginObject->setProperty("enabled", entry.enabled);
+            if (auto xml = std::unique_ptr<juce::XmlElement>(entry.description.createXml()))
+                pluginObject->setProperty("descriptionXml", xml->toString());
+            plugins.add(juce::var(pluginObject.release()));
+        }
     }
 
-    pluginsScanned = true;
+    auto root = std::make_unique<juce::DynamicObject>();
+    root->setProperty("status", statusToSave);
+    root->setProperty("plugins", plugins);
+
+    const auto cacheFile = getPluginCatalogCacheFile();
+    cacheFile.getParentDirectory().createDirectory();
+    cacheFile.replaceWithText(juce::JSON::toString(juce::var(root.release())));
+}
+
+juce::File AudioEngine::getPluginCatalogCacheFile() const
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("cigoL")
+        .getChildFile("plugin-catalog.json");
+}
+
+void AudioEngine::joinCompletedPluginScanThread()
+{
+    if (pluginScanThread.joinable() && ! pluginScanInProgress.load())
+        pluginScanThread.join();
+}
+
+void AudioEngine::commitPendingPluginScanResults()
+{
+    juce::String committedStatus;
+    {
+        const juce::ScopedLock lock(pluginCatalogLock);
+        if (pendingCachedPluginDescriptions.empty() && pendingPluginScanStatus.isEmpty())
+            return;
+
+        cachedPluginDescriptions = std::move(pendingCachedPluginDescriptions);
+        pendingCachedPluginDescriptions.clear();
+        pluginScanStatus = pendingPluginScanStatus.isNotEmpty()
+            ? pendingPluginScanStatus
+            : ("Remembered " + juce::String(cachedPluginDescriptions.size()) + " plugins");
+        pendingPluginScanStatus.clear();
+        committedStatus = pluginScanStatus;
+    }
+
+    juce::ignoreUnused(committedStatus);
+    savePluginCatalogCache();
 }
 
 juce::PluginDescription AudioEngine::findPluginDescription(const juce::String& identifier) const
 {
-    for (const auto& description : knownPluginList.getTypes())
-        if (description.fileOrIdentifier == identifier)
-            return description;
+    const juce::ScopedLock lock(pluginCatalogLock);
+    for (const auto& entry : cachedPluginDescriptions)
+        if (entry.enabled && entry.description.fileOrIdentifier == identifier)
+            return entry.description;
 
     return {};
 }
 
 juce::PluginDescription AudioEngine::findSuperColliderBridgeDescription() const
 {
-    for (const auto& description : knownPluginList.getTypes())
+    const juce::ScopedLock lock(pluginCatalogLock);
+    for (const auto& entry : cachedPluginDescriptions)
     {
+        if (! entry.enabled)
+            continue;
+
+        const auto& description = entry.description;
         if (description.isInstrument)
             continue;
 
@@ -673,8 +917,6 @@ juce::PluginDescription AudioEngine::findSuperColliderBridgeDescription() const
 
 void AudioEngine::refreshHostedPlugins()
 {
-    scanForPlugins();
-
     std::vector<HostedTrackRuntime> refreshedRuntimes;
     const auto superColliderBridgeDescription = findSuperColliderBridgeDescription();
 
@@ -785,7 +1027,10 @@ void AudioEngine::syncTrackPlaybackStates()
         state.hasActiveSuperColliderFx = std::any_of(track.inserts.begin(), track.inserts.end(), [] (const auto& insert) {
             return insert.kind == ProcessorKind::superColliderFx && ! insert.bypassed;
         });
-        state.bpm = session.transport.bpm;
+        state.projectBpm = session.transport.bpm;
+        state.tempoMultiplier = track.tempoMultiplier;
+        state.tempoAutomation = session.transport.tempoAutomation;
+        state.bpm = trackTempoAtBeat(session, track, session.transport.playheadBeat);
         state.playheadBeat = session.transport.playheadBeat;
         state.volume = track.mixer.volume;
         state.pan = track.mixer.pan;
@@ -814,6 +1059,10 @@ void AudioEngine::syncTrackPlaybackStates()
             regionState.fadeInBeats = region.fadeInBeats;
             regionState.fadeOutBeats = region.fadeOutBeats;
             regionState.gain = region.gain;
+            regionState.warpEnabled = region.warpEnabled;
+            regionState.sourceDurationSeconds = region.sourceDurationSeconds;
+            regionState.loopEnabled = region.loopEnabled;
+            regionState.loopLengthInBeats = region.loopLengthInBeats > 0.0 ? region.loopLengthInBeats : region.lengthInBeats;
             regionState.sourceFilePath = region.sourceFilePath;
             regionState.clipData = getOrLoadAudioClip(region.sourceFilePath);
             for (const auto& note : region.midiNotes)
@@ -851,6 +1100,118 @@ std::shared_ptr<const AudioEngine::AudioClipData> AudioEngine::getOrLoadAudioCli
     return clip;
 }
 
+juce::String AudioEngine::createWarpedAudioClipCacheKey(const juce::String& filePath,
+                                                        double sourceStartSeconds,
+                                                        double sourceDurationSeconds,
+                                                        double targetDurationSeconds) const
+{
+    return filePath
+        + "|warp|" + juce::String(sourceStartSeconds, 4)
+        + "|" + juce::String(sourceDurationSeconds, 4)
+        + "|" + juce::String(targetDurationSeconds, 4);
+}
+
+bool AudioEngine::isWarpedAudioClipReady(const Region& region, double targetDurationSeconds)
+{
+    if (region.sourceFilePath.isEmpty() || targetDurationSeconds <= 0.0)
+        return false;
+
+    const auto clipData = getOrLoadAudioClip(region.sourceFilePath);
+    if (clipData == nullptr)
+        return false;
+
+    const auto sourceClipDurationSeconds = static_cast<double>(clipData->samples.getNumSamples()) / juce::jmax(1.0, clipData->sampleRate);
+    const auto sourceStartSeconds = juce::jlimit(0.0, sourceClipDurationSeconds, region.sourceOffsetSeconds);
+    const auto explicitDuration = region.sourceDurationSeconds > 0.0 ? region.sourceDurationSeconds : (sourceClipDurationSeconds - sourceStartSeconds);
+    const auto sourceDurationSeconds = juce::jlimit(0.001, juce::jmax(0.001, sourceClipDurationSeconds - sourceStartSeconds), explicitDuration);
+    const auto cacheKey = createWarpedAudioClipCacheKey(region.sourceFilePath, sourceStartSeconds, sourceDurationSeconds, targetDurationSeconds);
+    return warpedAudioClipCache.find(cacheKey) != warpedAudioClipCache.end();
+}
+
+void AudioEngine::prepareWarpedAudioClip(const Region& region, double targetDurationSeconds)
+{
+    if (region.sourceFilePath.isEmpty() || targetDurationSeconds <= 0.0)
+        return;
+
+    TrackPlaybackState::RegionPlaybackState regionState;
+    regionState.sourceFilePath = region.sourceFilePath;
+    regionState.sourceOffsetSeconds = region.sourceOffsetSeconds;
+    regionState.sourceDurationSeconds = region.sourceDurationSeconds;
+    regionState.clipData = getOrLoadAudioClip(region.sourceFilePath);
+
+    if (regionState.clipData == nullptr)
+        return;
+
+    getOrCreateWarpedAudioClip(regionState, targetDurationSeconds);
+}
+
+std::shared_ptr<const AudioEngine::AudioClipData> AudioEngine::findWarpedAudioClip(const TrackPlaybackState::RegionPlaybackState& region,
+                                                                                    double targetDurationSeconds) const
+{
+    if (region.clipData == nullptr || targetDurationSeconds <= 0.0)
+        return {};
+
+    const auto sourceClipDurationSeconds = static_cast<double>(region.clipData->samples.getNumSamples()) / juce::jmax(1.0, region.clipData->sampleRate);
+    const auto sourceStartSeconds = juce::jlimit(0.0, sourceClipDurationSeconds, region.sourceOffsetSeconds);
+    const auto explicitDuration = region.sourceDurationSeconds > 0.0 ? region.sourceDurationSeconds : (sourceClipDurationSeconds - sourceStartSeconds);
+    const auto sourceDurationSeconds = juce::jlimit(0.001, juce::jmax(0.001, sourceClipDurationSeconds - sourceStartSeconds), explicitDuration);
+    const auto cacheKey = createWarpedAudioClipCacheKey(region.sourceFilePath, sourceStartSeconds, sourceDurationSeconds, targetDurationSeconds);
+
+    if (const auto it = warpedAudioClipCache.find(cacheKey); it != warpedAudioClipCache.end())
+        return it->second;
+
+    return {};
+}
+
+std::shared_ptr<const AudioEngine::AudioClipData> AudioEngine::getOrCreateWarpedAudioClip(const TrackPlaybackState::RegionPlaybackState& region,
+                                                                                           double targetDurationSeconds)
+{
+    if (region.clipData == nullptr || targetDurationSeconds <= 0.0)
+        return {};
+
+    const auto sourceClipDurationSeconds = static_cast<double>(region.clipData->samples.getNumSamples()) / juce::jmax(1.0, region.clipData->sampleRate);
+    const auto sourceStartSeconds = juce::jlimit(0.0, sourceClipDurationSeconds, region.sourceOffsetSeconds);
+    const auto explicitDuration = region.sourceDurationSeconds > 0.0 ? region.sourceDurationSeconds : (sourceClipDurationSeconds - sourceStartSeconds);
+    const auto sourceDurationSeconds = juce::jlimit(0.001, juce::jmax(0.001, sourceClipDurationSeconds - sourceStartSeconds), explicitDuration);
+
+    const auto cacheKey = createWarpedAudioClipCacheKey(region.sourceFilePath, sourceStartSeconds, sourceDurationSeconds, targetDurationSeconds);
+
+    if (const auto it = warpedAudioClipCache.find(cacheKey); it != warpedAudioClipCache.end())
+        return it->second;
+
+    auto warpedClip = std::make_shared<AudioClipData>();
+    warpedClip->filePath = cacheKey;
+    warpedClip->sampleRate = region.clipData->sampleRate;
+
+    const auto targetSamples = juce::jmax(1, static_cast<int>(std::round(targetDurationSeconds * warpedClip->sampleRate)));
+    warpedClip->samples.setSize(region.clipData->samples.getNumChannels(), targetSamples);
+
+    const auto sourceStartSample = sourceStartSeconds * warpedClip->sampleRate;
+    const auto sourceSpanSamples = sourceDurationSeconds * warpedClip->sampleRate;
+
+    for (int channel = 0; channel < warpedClip->samples.getNumChannels(); ++channel)
+    {
+        const auto sourceChannel = juce::jmin(channel, region.clipData->samples.getNumChannels() - 1);
+        for (int sample = 0; sample < targetSamples; ++sample)
+        {
+            const auto normalisedProgress = targetSamples > 1
+                ? static_cast<double>(sample) / static_cast<double>(targetSamples - 1)
+                : 0.0;
+            const auto sourcePosition = sourceStartSample + (normalisedProgress * sourceSpanSamples);
+            const auto sourceIndex = static_cast<int>(sourcePosition);
+            const auto clampedIndex = juce::jlimit(0, region.clipData->samples.getNumSamples() - 1, sourceIndex);
+            const auto nextIndex = juce::jlimit(0, region.clipData->samples.getNumSamples() - 1, clampedIndex + 1);
+            const auto alpha = static_cast<float>(sourcePosition - static_cast<double>(sourceIndex));
+            const auto sampleA = region.clipData->samples.getSample(sourceChannel, clampedIndex);
+            const auto sampleB = region.clipData->samples.getSample(sourceChannel, nextIndex);
+            warpedClip->samples.setSample(channel, sample, juce::jmap(alpha, sampleA, sampleB));
+        }
+    }
+
+    warpedAudioClipCache[cacheKey] = warpedClip;
+    return warpedClip;
+}
+
 void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
 {
     if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0 || currentSampleRate <= 0.0)
@@ -880,7 +1241,11 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
             continue;
 
         trackBuffer.clear();
-        const auto secondsPerBeat = 60.0 / juce::jmax(1.0, track.bpm);
+        const auto blockTempo = juce::jmax(1.0,
+                                           static_cast<double>(interpolateAutomationValue(track.tempoAutomation,
+                                                                                          track.playheadBeat,
+                                                                                          static_cast<float>(track.projectBpm))));
+        const auto secondsPerBeat = 60.0 / blockTempo;
         for (const auto& region : track.regions)
         {
             if (region.kind != RegionKind::audio || region.clipData == nullptr || region.lengthInBeats <= 0.0)
@@ -888,10 +1253,24 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
 
             const auto regionStartBeat = region.startBeat;
             const auto regionEndBeat = region.startBeat + region.lengthInBeats;
+            const auto loopLengthBeats = juce::jlimit(0.001, region.lengthInBeats, region.loopLengthInBeats > 0.0 ? region.loopLengthInBeats : region.lengthInBeats);
             const auto blockStartBeat = track.playheadBeat;
             const auto blockEndBeat = blockStartBeat + (static_cast<double>(buffer.getNumSamples()) / currentSampleRate) / secondsPerBeat;
 
             if (blockEndBeat <= regionStartBeat || blockStartBeat >= regionEndBeat)
+                continue;
+
+            const auto regionStartProjectSeconds = projectSecondsForBeat(session, regionStartBeat);
+            const auto loopEndProjectSeconds = projectSecondsForBeat(session, regionStartBeat + loopLengthBeats);
+            const auto regionEndProjectSeconds = projectSecondsForBeat(session, regionEndBeat);
+            const auto blockStartProjectSeconds = projectSecondsForBeat(session, blockStartBeat);
+            const auto targetDurationSeconds = juce::jmax(0.001,
+                                                          region.loopEnabled
+                                                              ? (loopEndProjectSeconds - regionStartProjectSeconds)
+                                                              : (regionEndProjectSeconds - regionStartProjectSeconds));
+            const auto renderClip = region.warpEnabled ? findWarpedAudioClip(region, targetDurationSeconds) : region.clipData;
+
+            if (renderClip == nullptr)
                 continue;
 
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
@@ -900,8 +1279,15 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
                 if (sampleBeat < regionStartBeat || sampleBeat >= regionEndBeat)
                     continue;
 
-                const auto sourceTimeSeconds = region.sourceOffsetSeconds + ((sampleBeat - regionStartBeat) * secondsPerBeat);
-                const auto sourcePosition = sourceTimeSeconds * region.clipData->sampleRate;
+                const auto sampleProjectSeconds = blockStartProjectSeconds + (static_cast<double>(sample) / currentSampleRate);
+                auto regionProjectOffsetSeconds = sampleProjectSeconds - regionStartProjectSeconds;
+                if (region.loopEnabled)
+                    regionProjectOffsetSeconds = std::fmod(juce::jmax(0.0, regionProjectOffsetSeconds), targetDurationSeconds);
+
+                const auto sourceTimeSeconds = region.warpEnabled
+                    ? juce::jlimit(0.0, targetDurationSeconds, regionProjectOffsetSeconds)
+                    : region.sourceOffsetSeconds + regionProjectOffsetSeconds;
+                const auto sourcePosition = sourceTimeSeconds * renderClip->sampleRate;
                 const auto sampleIndex = static_cast<int>(sourcePosition);
                 const auto alpha = static_cast<float>(sourcePosition - static_cast<double>(sampleIndex));
                 const auto regionBeatOffset = sampleBeat - regionStartBeat;
@@ -911,18 +1297,18 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
                 const auto leftGain = static_cast<float>(automatedVolume * bipolarPanLeftGain(automatedPan));
                 const auto rightGain = static_cast<float>(automatedVolume * bipolarPanRightGain(automatedPan));
 
-                if (sampleIndex < 0 || sampleIndex + 1 >= region.clipData->samples.getNumSamples())
+                if (sampleIndex < 0 || sampleIndex + 1 >= renderClip->samples.getNumSamples())
                     continue;
 
-                const auto sampleLeftA = region.clipData->samples.getSample(0, sampleIndex);
-                const auto sampleLeftB = region.clipData->samples.getSample(0, sampleIndex + 1);
+                const auto sampleLeftA = renderClip->samples.getSample(0, sampleIndex);
+                const auto sampleLeftB = renderClip->samples.getSample(0, sampleIndex + 1);
                 auto dryLeft = juce::jmap(alpha, sampleLeftA, sampleLeftB);
 
                 float dryRight = dryLeft;
-                if (region.clipData->samples.getNumChannels() > 1)
+                if (renderClip->samples.getNumChannels() > 1)
                 {
-                    const auto sampleRightA = region.clipData->samples.getSample(1, sampleIndex);
-                    const auto sampleRightB = region.clipData->samples.getSample(1, sampleIndex + 1);
+                    const auto sampleRightA = renderClip->samples.getSample(1, sampleIndex);
+                    const auto sampleRightB = renderClip->samples.getSample(1, sampleIndex + 1);
                     dryRight = juce::jmap(alpha, sampleRightA, sampleRightB);
                 }
 
@@ -1045,7 +1431,8 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
         if (track.kind != TrackKind::instrument && track.kind != TrackKind::midi)
             continue;
 
-        const auto secondsPerBeat = 60.0 / juce::jmax(1.0, track.bpm);
+        const auto blockTempo = juce::jmax(1.0, track.bpm);
+        const auto secondsPerBeat = 60.0 / blockTempo;
         const auto trackGainTrim = track.kind == TrackKind::instrument ? 0.16f : 0.12f;
         trackBuffer.clear();
         trackMidi.clear();
@@ -1082,6 +1469,7 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
 
             const auto regionStartBeat = region.startBeat;
             const auto regionEndBeat = region.startBeat + region.lengthInBeats;
+            const auto loopLengthBeats = juce::jlimit(0.001, region.lengthInBeats, region.loopLengthInBeats > 0.0 ? region.loopLengthInBeats : region.lengthInBeats);
             const auto blockStartBeat = track.playheadBeat;
             const auto blockEndBeat = blockStartBeat + (static_cast<double>(buffer.getNumSamples()) / currentSampleRate) / secondsPerBeat;
 
@@ -1099,6 +1487,9 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
                 const auto leftGain = static_cast<float>(automatedVolume * bipolarPanLeftGain(automatedPan));
                 const auto rightGain = static_cast<float>(automatedVolume * bipolarPanRightGain(automatedPan));
                 const auto regionBeatOffset = sampleBeat - regionStartBeat;
+                const auto loopBeatOffset = region.loopEnabled
+                    ? std::fmod(juce::jmax(0.0, regionBeatOffset), loopLengthBeats)
+                    : regionBeatOffset;
 
                 auto mixedSample = 0.0f;
 
@@ -1107,14 +1498,20 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
                     const auto noteStartBeat = note.startBeat;
                     const auto noteEndBeat = note.startBeat + note.lengthInBeats;
 
-                    if (regionBeatOffset < noteStartBeat || regionBeatOffset >= noteEndBeat)
+                    if (loopBeatOffset < noteStartBeat || loopBeatOffset >= noteEndBeat)
                         continue;
 
-                    const auto noteBeatOffset = regionBeatOffset - noteStartBeat;
+                    const auto noteBeatOffset = loopBeatOffset - noteStartBeat;
                     const auto velocityGain = static_cast<float>(note.velocity / 127.0f);
-                    const auto envelope = midiRegionEnvelope(noteBeatOffset, note.lengthInBeats, secondsPerBeat);
+                    const auto sampleProjectTempo = interpolateAutomationValue(track.tempoAutomation,
+                                                                               sampleBeat,
+                                                                               static_cast<float>(track.projectBpm));
+                    const auto sampleTrackTempo = juce::jmax(1.0, static_cast<double>(sampleProjectTempo)
+                                                                      * static_cast<double>(juce::jmax(0.25f, track.tempoMultiplier)));
+                    const auto sampleSecondsPerBeat = 60.0 / sampleTrackTempo;
+                    const auto envelope = midiRegionEnvelope(noteBeatOffset, note.lengthInBeats, sampleSecondsPerBeat);
 
-                    mixedSample += midiRegionSample(track.kind, note.pitch, noteBeatOffset, secondsPerBeat)
+                    mixedSample += midiRegionSample(track.kind, note.pitch, noteBeatOffset, sampleSecondsPerBeat)
                                    * velocityGain * envelope;
                 }
 
@@ -1132,33 +1529,46 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
             if (instrumentRuntime != nullptr)
             {
                 auto& activePitches = activeMidiNotesByTrack[track.trackId];
+                const auto repetitionCount = region.loopEnabled
+                    ? juce::jmax(1, static_cast<int>(std::ceil(region.lengthInBeats / loopLengthBeats)))
+                    : 1;
 
-                for (const auto& note : region.midiNotes)
+                for (int repetition = 0; repetition < repetitionCount; ++repetition)
                 {
-                    const auto noteStartBeat = region.startBeat + note.startBeat;
-                    const auto noteEndBeat = noteStartBeat + note.lengthInBeats;
+                    const auto repetitionStartBeat = region.startBeat + static_cast<double>(repetition) * loopLengthBeats;
+                    const auto repetitionEndBeat = juce::jmin(regionEndBeat, repetitionStartBeat + loopLengthBeats);
+                    if (repetitionStartBeat >= regionEndBeat)
+                        break;
 
-                    if (blockStartBeat <= noteStartBeat && noteStartBeat < blockEndBeat)
+                    for (const auto& note : region.midiNotes)
                     {
-                        const auto samplePosition = juce::jlimit(0,
-                                                                 buffer.getNumSamples() - 1,
-                                                                 static_cast<int>(((noteStartBeat - blockStartBeat) * secondsPerBeat) * currentSampleRate));
-                        trackMidi.addEvent(juce::MidiMessage::noteOn(1, note.pitch, static_cast<juce::uint8>(note.velocity)), samplePosition);
-                        activePitches.insert(note.pitch);
-                    }
-                    else if (noteStartBeat < blockStartBeat && blockStartBeat < noteEndBeat && activePitches.count(note.pitch) == 0)
-                    {
-                        trackMidi.addEvent(juce::MidiMessage::noteOn(1, note.pitch, static_cast<juce::uint8>(note.velocity)), 0);
-                        activePitches.insert(note.pitch);
-                    }
+                        const auto noteStartBeat = repetitionStartBeat + note.startBeat;
+                        const auto noteEndBeat = juce::jmin(repetitionEndBeat, noteStartBeat + note.lengthInBeats);
+                        if (noteStartBeat >= repetitionEndBeat)
+                            continue;
 
-                    if (blockStartBeat <= noteEndBeat && noteEndBeat < blockEndBeat)
-                    {
-                        const auto samplePosition = juce::jlimit(0,
-                                                                 buffer.getNumSamples() - 1,
-                                                                 static_cast<int>(((noteEndBeat - blockStartBeat) * secondsPerBeat) * currentSampleRate));
-                        trackMidi.addEvent(juce::MidiMessage::noteOff(1, note.pitch), samplePosition);
-                        activePitches.erase(note.pitch);
+                        if (blockStartBeat <= noteStartBeat && noteStartBeat < blockEndBeat)
+                        {
+                            const auto samplePosition = juce::jlimit(0,
+                                                                     buffer.getNumSamples() - 1,
+                                                                     static_cast<int>(((noteStartBeat - blockStartBeat) * secondsPerBeat) * currentSampleRate));
+                            trackMidi.addEvent(juce::MidiMessage::noteOn(1, note.pitch, static_cast<juce::uint8>(note.velocity)), samplePosition);
+                            activePitches.insert(note.pitch);
+                        }
+                        else if (noteStartBeat < blockStartBeat && blockStartBeat < noteEndBeat && activePitches.count(note.pitch) == 0)
+                        {
+                            trackMidi.addEvent(juce::MidiMessage::noteOn(1, note.pitch, static_cast<juce::uint8>(note.velocity)), 0);
+                            activePitches.insert(note.pitch);
+                        }
+
+                        if (blockStartBeat <= noteEndBeat && noteEndBeat < blockEndBeat)
+                        {
+                            const auto samplePosition = juce::jlimit(0,
+                                                                     buffer.getNumSamples() - 1,
+                                                                     static_cast<int>(((noteEndBeat - blockStartBeat) * secondsPerBeat) * currentSampleRate));
+                            trackMidi.addEvent(juce::MidiMessage::noteOff(1, note.pitch), samplePosition);
+                            activePitches.erase(note.pitch);
+                        }
                     }
                 }
             }

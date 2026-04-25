@@ -1057,7 +1057,7 @@ void SuperColliderProcessBridge::syncGlobalTransportControls(const SessionState&
         return;
 
     oscSender.send("/c_set", runtimeState.transportControlBus, session.transport.playing ? 1.0f : 0.0f);
-    oscSender.send("/c_set", runtimeState.tempoControlBus, static_cast<float>(session.transport.bpm));
+    oscSender.send("/c_set", runtimeState.tempoControlBus, static_cast<float>(projectTempoAtBeat(session, session.transport.playheadBeat)));
     oscSender.send("/c_set", runtimeState.playheadControlBus, static_cast<float>(session.transport.playheadBeat));
 }
 } // namespace cigol

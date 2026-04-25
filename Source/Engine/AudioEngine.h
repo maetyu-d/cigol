@@ -9,6 +9,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
 
+#include <atomic>
+#include <thread>
 #include <set>
 
 namespace cigol
@@ -22,6 +24,14 @@ public:
         juce::String name;
         juce::String identifier;
         bool isInstrument { false };
+    };
+
+    struct RememberedPluginEntry
+    {
+        juce::String name;
+        juce::String identifier;
+        bool isInstrument { false };
+        bool enabled { true };
     };
 
     struct HostedInsertMeterState
@@ -63,6 +73,11 @@ public:
     juce::String getEngineSummary() const;
     juce::String getPluginHostingSummary() const;
     std::vector<LoadablePluginChoice> getAvailablePluginChoices(const TrackState& track, int slotIndex);
+    std::vector<RememberedPluginEntry> getRememberedPluginCatalog() const;
+    juce::String getPluginScanStatus() const;
+    bool isPluginScanInProgress() const;
+    void requestPluginRescan();
+    bool setPluginEnabled(const juce::String& pluginIdentifier, bool enabled);
     std::vector<AutomatableParameterChoice> getAutomatableParameters(int trackId) const;
     PluginParameterBindingStatus getTrackPluginParameterBindingStatus(int trackId, int slotIndex, int parameterIndex) const;
     float getTrackPluginParameterValue(int trackId, int slotIndex, int parameterIndex) const;
@@ -75,6 +90,8 @@ public:
     std::unique_ptr<juce::AudioProcessorEditor> createTrackSlotEditor(int trackId, int slotIndex);
     void syncPluginStatesToSession();
     void reloadSessionState();
+    bool isWarpedAudioClipReady(const Region& region, double targetDurationSeconds);
+    void prepareWarpedAudioClip(const Region& region, double targetDurationSeconds);
 
     struct AudioClipData
     {
@@ -112,6 +129,10 @@ public:
             double fadeInBeats { 0.0 };
             double fadeOutBeats { 0.0 };
             float gain { 1.0f };
+            bool warpEnabled { false };
+            double sourceDurationSeconds { 0.0 };
+            bool loopEnabled { false };
+            double loopLengthInBeats { 0.0 };
             juce::String sourceFilePath;
             std::shared_ptr<const struct AudioClipData> clipData;
             std::vector<MidiNotePlaybackState> midiNotes;
@@ -125,9 +146,12 @@ public:
         bool hasSuperColliderMidiGenerator { false };
         bool hasActiveSuperColliderFx { false };
         double bpm { 120.0 };
+        double projectBpm { 120.0 };
         double playheadBeat { 1.0 };
+        float tempoMultiplier { 1.0f };
         float volume { 0.0f };
         float pan { 0.0f };
+        std::vector<AutomationPoint> tempoAutomation;
         std::vector<AutomationPoint> volumeAutomation;
         std::vector<AutomationPoint> panAutomation;
         std::vector<PluginAutomationLane> pluginAutomationLanes;
@@ -137,6 +161,12 @@ public:
     };
 
 private:
+    struct CachedPluginDescription
+    {
+        juce::PluginDescription description;
+        bool enabled { true };
+    };
+
     struct HostedPluginRuntime
     {
         int slotIndex { -1 };
@@ -158,10 +188,22 @@ private:
     void rebuildGraph(double sampleRate, int blockSize);
     void syncTrackPlaybackStates();
     void refreshHostedPlugins();
-    void scanForPlugins();
+    void loadPluginCatalogCache();
+    void savePluginCatalogCache() const;
+    juce::File getPluginCatalogCacheFile() const;
+    void joinCompletedPluginScanThread();
+    void commitPendingPluginScanResults();
     juce::PluginDescription findPluginDescription(const juce::String& identifier) const;
     juce::PluginDescription findSuperColliderBridgeDescription() const;
     std::shared_ptr<const AudioClipData> getOrLoadAudioClip(const juce::String& filePath);
+    juce::String createWarpedAudioClipCacheKey(const juce::String& filePath,
+                                               double sourceStartSeconds,
+                                               double sourceDurationSeconds,
+                                               double targetDurationSeconds) const;
+    std::shared_ptr<const AudioClipData> findWarpedAudioClip(const TrackPlaybackState::RegionPlaybackState& region,
+                                                             double targetDurationSeconds) const;
+    std::shared_ptr<const AudioClipData> getOrCreateWarpedAudioClip(const TrackPlaybackState::RegionPlaybackState& region,
+                                                                    double targetDurationSeconds);
     void updateMeters();
 
     SessionState& session;
@@ -169,7 +211,6 @@ private:
 
     juce::AudioFormatManager audioFormatManager;
     juce::AudioPluginFormatManager pluginFormatManager;
-    juce::KnownPluginList knownPluginList;
     juce::AudioProcessorGraph graph;
     juce::MidiBuffer midiBuffer;
     juce::AudioBuffer<float> graphBuffer;
@@ -177,15 +218,24 @@ private:
     std::vector<TrackPlaybackState> trackPlaybackStates;
     std::vector<HostedTrackRuntime> hostedTrackRuntimes;
     std::map<juce::String, std::shared_ptr<const AudioClipData>> audioClipCache;
+    std::map<juce::String, std::shared_ptr<const AudioClipData>> warpedAudioClipCache;
     std::map<int, std::set<int>> activeMidiNotesByTrack;
     std::vector<HostedInsertMeterState> hostedInsertMeterStates;
     juce::SpinLock trackStateLock;
     juce::SpinLock pluginRuntimeLock;
     juce::SpinLock hostedInsertMeterLock;
+    juce::CriticalSection pluginCatalogLock;
     juce::AudioProcessorGraph::NodeID audioInputNodeId {};
     juce::AudioProcessorGraph::NodeID audioOutputNodeId {};
     double currentSampleRate { 44100.0 };
     int currentBlockSize { 512 };
-    bool pluginsScanned { false };
+    std::vector<CachedPluginDescription> cachedPluginDescriptions;
+    std::vector<CachedPluginDescription> pendingCachedPluginDescriptions;
+    juce::String pluginScanStatus { "Plugin library idle" };
+    juce::String pendingPluginScanStatus;
+    std::thread pluginScanThread;
+    std::atomic<bool> pluginScanInProgress { false };
+    std::atomic<bool> pluginScanResultsPending { false };
+    bool deferredPluginInitialisationPending { true };
 };
 } // namespace cigol

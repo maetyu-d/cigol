@@ -232,6 +232,10 @@ var regionToVar(const Region& region)
     object->setProperty("fadeInBeats", region.fadeInBeats);
     object->setProperty("fadeOutBeats", region.fadeOutBeats);
     object->setProperty("gain", region.gain);
+    object->setProperty("warpEnabled", region.warpEnabled);
+    object->setProperty("sourceDurationSeconds", region.sourceDurationSeconds);
+    object->setProperty("loopEnabled", region.loopEnabled);
+    object->setProperty("loopLengthInBeats", region.loopLengthInBeats);
 
     juce::Array<var> notes;
     for (const auto& note : region.midiNotes)
@@ -255,6 +259,18 @@ Region regionFromVar(const var& value)
         region.fadeInBeats = static_cast<double>(object->getProperty("fadeInBeats"));
         region.fadeOutBeats = static_cast<double>(object->getProperty("fadeOutBeats"));
         region.gain = static_cast<float>(static_cast<double>(object->getProperty("gain")));
+        region.warpEnabled = object->hasProperty("warpEnabled")
+            ? static_cast<bool>(object->getProperty("warpEnabled"))
+            : false;
+        region.sourceDurationSeconds = object->hasProperty("sourceDurationSeconds")
+            ? static_cast<double>(object->getProperty("sourceDurationSeconds"))
+            : 0.0;
+        region.loopEnabled = object->hasProperty("loopEnabled")
+            ? static_cast<bool>(object->getProperty("loopEnabled"))
+            : false;
+        region.loopLengthInBeats = object->hasProperty("loopLengthInBeats")
+            ? static_cast<double>(object->getProperty("loopLengthInBeats"))
+            : region.lengthInBeats;
 
         if (auto* notesArray = object->getProperty("midiNotes").getArray())
             for (const auto& noteValue : *notesArray)
@@ -272,6 +288,8 @@ var trackToVar(const TrackState& track)
     object->setProperty("role", track.role);
     object->setProperty("kind", enumToInt(track.kind));
     object->setProperty("channelMode", enumToInt(track.channelMode));
+    object->setProperty("folderDepth", track.folderDepth);
+    object->setProperty("folderExpanded", track.folderExpanded);
     object->setProperty("colour", colourToVar(track.colour));
     object->setProperty("armed", track.armed);
     object->setProperty("muted", track.muted);
@@ -284,6 +302,7 @@ var trackToVar(const TrackState& track)
     object->setProperty("automationExpanded", track.automationExpanded);
     object->setProperty("automationWriteMode", enumToInt(track.automationWriteMode));
     object->setProperty("selectedPluginAutomationLaneIndex", track.selectedPluginAutomationLaneIndex);
+    object->setProperty("tempoMultiplier", track.tempoMultiplier);
 
     juce::Array<var> volumePoints;
     for (const auto& point : track.volumeAutomation)
@@ -326,6 +345,12 @@ TrackState trackFromVar(const var& value)
         track.role = object->getProperty("role").toString();
         track.kind = intToEnum(object->getProperty("kind"), TrackKind::audio);
         track.channelMode = intToEnum(object->getProperty("channelMode"), TrackChannelMode::stereo);
+        track.folderDepth = object->hasProperty("folderDepth")
+            ? juce::jmax(0, static_cast<int>(object->getProperty("folderDepth")))
+            : 0;
+        track.folderExpanded = object->hasProperty("folderExpanded")
+            ? static_cast<bool>(object->getProperty("folderExpanded"))
+            : true;
         track.colour = colourFromVar(object->getProperty("colour"), juce::Colours::grey);
         track.armed = static_cast<bool>(object->getProperty("armed"));
         track.muted = static_cast<bool>(object->getProperty("muted"));
@@ -341,6 +366,9 @@ TrackState trackFromVar(const var& value)
         track.automationGestureActive = false;
         track.automationLatchActive = false;
         track.selectedPluginAutomationLaneIndex = static_cast<int>(object->getProperty("selectedPluginAutomationLaneIndex"));
+        track.tempoMultiplier = object->hasProperty("tempoMultiplier")
+            ? static_cast<float>(static_cast<double>(object->getProperty("tempoMultiplier")))
+            : 1.0f;
 
         if (auto* array = object->getProperty("volumeAutomation").getArray())
             for (const auto& pointValue : *array)
@@ -435,9 +463,14 @@ SessionState createDemoSession()
 
     SessionState session;
     session.transport.playheadBeat = 5.25;
+    session.transport.tempoAutomation = {
+        { 1.0, 120.0f, AutomationPoint::SegmentShape::linear },
+        { 9.0, 128.0f, AutomationPoint::SegmentShape::easeIn },
+        { 17.0, 116.0f, AutomationPoint::SegmentShape::easeOut }
+    };
 
     session.tracks = {
-        { 1, "Lead Vox", "Audio Track", TrackKind::audio, TrackChannelMode::stereo, Colour::fromRGB(236, 94, 90), false, false, false, true,
+        { 1, "Lead Vox", "Audio Track", TrackKind::audio, TrackChannelMode::stereo, 0, true, Colour::fromRGB(236, 94, 90), false, false, false, true,
             { 0.84f, -0.05f, 0.0f },
             AutomationLaneMode::volume, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -464,7 +497,7 @@ SessionState createDemoSession()
             {},
             std::nullopt },
 
-        { 2, "Pulse Lab", "MIDI Track", TrackKind::midi, TrackChannelMode::stereo, Colour::fromRGB(247, 184, 68), false, false, false, false,
+        { 2, "Pulse Lab", "MIDI Track", TrackKind::midi, TrackChannelMode::stereo, 0, true, Colour::fromRGB(247, 184, 68), false, false, false, false,
             { 0.81f, 0.0f, 0.0f },
             AutomationLaneMode::volume, false, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -491,7 +524,7 @@ SessionState createDemoSession()
                 SuperColliderScriptState { "Euclid 7/12", "Pbind(\\\\degree, Pseq([0, 2, 4, 7], inf), \\\\dur, 0.25)", "", "Pdef(\\\\euclid)", "SC MIDI Clock -> Pulse Lab", "Generating MIDI into track input", true, false } },
             std::nullopt },
 
-        { 3, "Chroma Keys", "Instrument Track", TrackKind::instrument, TrackChannelMode::stereo, Colour::fromRGB(67, 183, 148), false, false, false, false,
+        { 3, "Chroma Keys", "Instrument Track", TrackKind::instrument, TrackChannelMode::stereo, 0, true, Colour::fromRGB(67, 183, 148), false, false, false, false,
             { 0.76f, -0.10f, 0.0f },
             AutomationLaneMode::pan, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -527,7 +560,7 @@ SessionState createDemoSession()
             {},
             std::nullopt },
 
-        { 4, "Nebula Scene", "SuperCollider Render", TrackKind::superColliderRender, TrackChannelMode::stereo, juce::Colour::fromRGB(84, 155, 255), false, false, false, false,
+        { 4, "Nebula Scene", "SuperCollider Render", TrackKind::superColliderRender, TrackChannelMode::stereo, 0, true, juce::Colour::fromRGB(84, 155, 255), false, false, false, false,
             { 0.70f, 0.18f, 0.0f },
             AutomationLaneMode::volume, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -550,7 +583,7 @@ SessionState createDemoSession()
             {},
             SuperColliderScriptState { "Nebula Scene", "Out.ar(0, GVerb.ar(Mix(SinOsc.ar([110, 220, 330], 0, 0.1))))", "nebulaScene", "SynthDef(\\\\nebulaScene)", "SC Render Bus A -> audio stem", "Ready for offline bounce or live preview", true, true } },
 
-        { 5, "FX Print", "Audio Track", TrackKind::audio, TrackChannelMode::stereo, juce::Colour::fromRGB(172, 122, 255), false, true, false, false,
+        { 5, "FX Print", "Audio Track", TrackKind::audio, TrackChannelMode::stereo, 0, true, juce::Colour::fromRGB(172, 122, 255), false, true, false, false,
             { 0.62f, 0.0f, 0.0f },
             AutomationLaneMode::volume, false, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -585,18 +618,31 @@ SessionState createDemoSession()
 juce::String serialiseSessionToJson(const SessionState& session)
 {
     auto root = std::make_unique<DynamicObject>();
-    root->setProperty("formatVersion", 1);
+    root->setProperty("formatVersion", 2);
     root->setProperty("transportPlaying", session.transport.playing);
     root->setProperty("transportRecording", session.transport.recording);
+    root->setProperty("transportCycleEnabled", session.transport.cycleEnabled);
+    root->setProperty("transportCycleStartBeat", session.transport.cycleStartBeat);
+    root->setProperty("transportCycleEndBeat", session.transport.cycleEndBeat);
+    root->setProperty("transportMetronomeEnabled", session.transport.metronomeEnabled);
+    root->setProperty("transportCountInEnabled", session.transport.countInEnabled);
     root->setProperty("transportBpm", session.transport.bpm);
     root->setProperty("transportPlayheadBeat", session.transport.playheadBeat);
     root->setProperty("transportVisibleBeats", session.transport.visibleBeats);
+    root->setProperty("transportTimeSignatureNumerator", session.transport.timeSignatureNumerator);
+    root->setProperty("transportTimeSignatureDenominator", session.transport.timeSignatureDenominator);
+    root->setProperty("transportKeySignature", session.transport.keySignature);
+    juce::Array<var> tempoPoints;
+    for (const auto& point : session.transport.tempoAutomation)
+        tempoPoints.add(automationPointToVar(point));
+    root->setProperty("transportTempoAutomation", tempoPoints);
     root->setProperty("routingSuperColliderServerConnected", session.routing.superColliderServerConnected);
     root->setProperty("routingRenderBusName", session.routing.renderBusName);
     root->setProperty("routingFxBusName", session.routing.fxBusName);
     root->setProperty("routingMidiBusName", session.routing.midiBusName);
     root->setProperty("layoutLeftSidebarWidth", session.layout.leftSidebarWidth);
     root->setProperty("layoutRightSidebarWidth", session.layout.rightSidebarWidth);
+    root->setProperty("layoutSuperColliderOverviewVisible", session.layout.superColliderOverviewVisible);
     root->setProperty("layoutLowerPaneHeight", session.layout.lowerPaneHeight);
     root->setProperty("layoutLowerPaneExpanded", session.layout.lowerPaneExpanded);
     root->setProperty("layoutLowerPaneModeValue", session.layout.lowerPaneModeValue);
@@ -608,6 +654,9 @@ juce::String serialiseSessionToJson(const SessionState& session)
     root->setProperty("layoutMidiEditorZoom", session.layout.midiEditorZoom);
     root->setProperty("layoutAudioEditorTool", session.layout.audioEditorTool);
     root->setProperty("layoutMidiEditorTool", session.layout.midiEditorTool);
+    root->setProperty("layoutSnapMode", enumToInt(session.layout.snapMode));
+    root->setProperty("layoutDragMode", enumToInt(session.layout.dragMode));
+    root->setProperty("layoutNudgeMode", enumToInt(session.layout.nudgeMode));
     root->setProperty("selectedTrackId", session.selectedTrackId);
     root->setProperty("selectedRegionTrackId", session.selectedRegionTrackId);
     root->setProperty("selectedRegionIndex", session.selectedRegionIndex);
@@ -630,9 +679,42 @@ juce::Result deserialiseSessionFromJson(SessionState& session, const juce::Strin
     SessionState loaded;
     loaded.transport.playing = false;
     loaded.transport.recording = false;
+    loaded.transport.cycleEnabled = object->hasProperty("transportCycleEnabled")
+        ? static_cast<bool>(object->getProperty("transportCycleEnabled"))
+        : false;
+    loaded.transport.cycleStartBeat = object->hasProperty("transportCycleStartBeat")
+        ? static_cast<double>(object->getProperty("transportCycleStartBeat"))
+        : loaded.transport.cycleStartBeat;
+    loaded.transport.cycleEndBeat = object->hasProperty("transportCycleEndBeat")
+        ? static_cast<double>(object->getProperty("transportCycleEndBeat"))
+        : loaded.transport.cycleEndBeat;
+    loaded.transport.metronomeEnabled = object->hasProperty("transportMetronomeEnabled")
+        ? static_cast<bool>(object->getProperty("transportMetronomeEnabled"))
+        : true;
+    loaded.transport.countInEnabled = object->hasProperty("transportCountInEnabled")
+        ? static_cast<bool>(object->getProperty("transportCountInEnabled"))
+        : false;
     loaded.transport.bpm = static_cast<double>(object->getProperty("transportBpm"));
     loaded.transport.playheadBeat = static_cast<double>(object->getProperty("transportPlayheadBeat"));
     loaded.transport.visibleBeats = static_cast<double>(object->getProperty("transportVisibleBeats"));
+    loaded.transport.timeSignatureNumerator = object->hasProperty("transportTimeSignatureNumerator")
+        ? static_cast<int>(object->getProperty("transportTimeSignatureNumerator"))
+        : 4;
+    loaded.transport.timeSignatureDenominator = object->hasProperty("transportTimeSignatureDenominator")
+        ? static_cast<int>(object->getProperty("transportTimeSignatureDenominator"))
+        : 4;
+    loaded.transport.keySignature = object->hasProperty("transportKeySignature")
+        ? object->getProperty("transportKeySignature").toString()
+        : juce::String("C Maj");
+    loaded.transport.cycleStartBeat = juce::jlimit(1.0,
+                                                   loaded.transport.visibleBeats,
+                                                   loaded.transport.cycleStartBeat);
+    loaded.transport.cycleEndBeat = juce::jlimit(loaded.transport.cycleStartBeat + 1.0,
+                                                 loaded.transport.visibleBeats + 1.0,
+                                                 loaded.transport.cycleEndBeat);
+    if (auto* array = object->getProperty("transportTempoAutomation").getArray())
+        for (const auto& pointValue : *array)
+            loaded.transport.tempoAutomation.push_back(automationPointFromVar(pointValue));
     loaded.routing.superColliderServerConnected = static_cast<bool>(object->getProperty("routingSuperColliderServerConnected"));
     loaded.routing.renderBusName = object->getProperty("routingRenderBusName").toString();
     loaded.routing.fxBusName = object->getProperty("routingFxBusName").toString();
@@ -643,6 +725,9 @@ juce::Result deserialiseSessionFromJson(SessionState& session, const juce::Strin
     loaded.layout.rightSidebarWidth = object->hasProperty("layoutRightSidebarWidth")
         ? static_cast<int>(object->getProperty("layoutRightSidebarWidth"))
         : loaded.layout.rightSidebarWidth;
+    loaded.layout.superColliderOverviewVisible = object->hasProperty("layoutSuperColliderOverviewVisible")
+        ? static_cast<bool>(object->getProperty("layoutSuperColliderOverviewVisible"))
+        : loaded.layout.superColliderOverviewVisible;
     loaded.layout.lowerPaneHeight = object->hasProperty("layoutLowerPaneHeight")
         ? static_cast<int>(object->getProperty("layoutLowerPaneHeight"))
         : loaded.layout.lowerPaneHeight;
@@ -676,6 +761,15 @@ juce::Result deserialiseSessionFromJson(SessionState& session, const juce::Strin
     loaded.layout.midiEditorTool = object->hasProperty("layoutMidiEditorTool")
         ? static_cast<int>(object->getProperty("layoutMidiEditorTool"))
         : loaded.layout.midiEditorTool;
+    loaded.layout.snapMode = object->hasProperty("layoutSnapMode")
+        ? intToEnum(object->getProperty("layoutSnapMode"), SnapMode::division)
+        : loaded.layout.snapMode;
+    loaded.layout.dragMode = object->hasProperty("layoutDragMode")
+        ? intToEnum(object->getProperty("layoutDragMode"), DragMode::overlap)
+        : loaded.layout.dragMode;
+    loaded.layout.nudgeMode = object->hasProperty("layoutNudgeMode")
+        ? intToEnum(object->getProperty("layoutNudgeMode"), NudgeMode::beat)
+        : loaded.layout.nudgeMode;
     loaded.selectedTrackId = static_cast<int>(object->getProperty("selectedTrackId"));
     loaded.selectedRegionTrackId = static_cast<int>(object->getProperty("selectedRegionTrackId"));
     loaded.selectedRegionIndex = static_cast<int>(object->getProperty("selectedRegionIndex"));
@@ -725,6 +819,100 @@ juce::Result saveSessionToFile(const SessionState& session, const juce::File& fi
     return juce::Result::ok();
 }
 
+double projectTempoAtBeat(const TransportState& transport, double beat)
+{
+    const auto fallback = static_cast<float>(transport.bpm);
+
+    if (transport.tempoAutomation.empty())
+        return transport.bpm;
+
+    if (beat <= transport.tempoAutomation.front().beat)
+        return transport.tempoAutomation.front().value;
+
+    if (beat >= transport.tempoAutomation.back().beat)
+        return transport.tempoAutomation.back().value;
+
+    for (size_t i = 1; i < transport.tempoAutomation.size(); ++i)
+    {
+        const auto& left = transport.tempoAutomation[i - 1];
+        const auto& right = transport.tempoAutomation[i];
+
+        if (beat <= right.beat)
+        {
+            const auto span = juce::jmax(0.0001, right.beat - left.beat);
+            const auto rawT = static_cast<float>((beat - left.beat) / span);
+            float t = rawT;
+
+            switch (left.shapeToNext)
+            {
+                case AutomationPoint::SegmentShape::linear: break;
+                case AutomationPoint::SegmentShape::easeIn: t *= t; break;
+                case AutomationPoint::SegmentShape::easeOut: t = 1.0f - ((1.0f - t) * (1.0f - t)); break;
+                case AutomationPoint::SegmentShape::step: t = 0.0f; break;
+            }
+
+            return juce::jmax(1.0, static_cast<double>(juce::jmap(t, left.value, right.value)));
+        }
+    }
+
+    return juce::jmax(1.0, static_cast<double>(fallback));
+}
+
+double projectTempoAtBeat(const SessionState& session, double beat)
+{
+    return projectTempoAtBeat(session.transport, beat);
+}
+
+double projectSecondsForBeat(const TransportState& transport, double beat)
+{
+    if (beat <= 1.0)
+        return 0.0;
+
+    if (transport.tempoAutomation.empty())
+        return (beat - 1.0) * (60.0 / juce::jmax(1.0, transport.bpm));
+
+    auto accumulatedSeconds = 0.0;
+    auto previousBeat = 1.0;
+    auto previousTempo = projectTempoAtBeat(transport, 1.0);
+
+    for (const auto& point : transport.tempoAutomation)
+    {
+        if (point.beat <= previousBeat)
+        {
+            previousTempo = point.value;
+            continue;
+        }
+
+        const auto segmentEndBeat = juce::jmin(beat, point.beat);
+        if (segmentEndBeat > previousBeat)
+        {
+            const auto segmentBeats = segmentEndBeat - previousBeat;
+            accumulatedSeconds += segmentBeats * (60.0 / juce::jmax(1.0, previousTempo));
+            previousBeat = segmentEndBeat;
+        }
+
+        previousTempo = point.value;
+
+        if (previousBeat >= beat)
+            return accumulatedSeconds;
+    }
+
+    if (beat > previousBeat)
+        accumulatedSeconds += (beat - previousBeat) * (60.0 / juce::jmax(1.0, previousTempo));
+
+    return accumulatedSeconds;
+}
+
+double projectSecondsForBeat(const SessionState& session, double beat)
+{
+    return projectSecondsForBeat(session.transport, beat);
+}
+
+double trackTempoAtBeat(const SessionState& session, const TrackState& track, double beat)
+{
+    return juce::jmax(1.0, projectTempoAtBeat(session, beat) * static_cast<double>(juce::jmax(0.25f, track.tempoMultiplier)));
+}
+
 juce::Result loadSessionFromFile(SessionState& session, const juce::File& file)
 {
     if (! file.existsAsFile())
@@ -741,6 +929,7 @@ juce::String toDisplayString(TrackKind kind)
         case TrackKind::midi: return "MIDI";
         case TrackKind::instrument: return "Instrument";
         case TrackKind::superColliderRender: return "SuperCollider Render";
+        case TrackKind::folder: return "Folder Stack";
     }
 
     return "Unknown";
@@ -815,5 +1004,44 @@ juce::String toDisplayString(AutomationPoint::SegmentShape shape)
     }
 
     return "Shape";
+}
+
+juce::String toDisplayString(SnapMode mode)
+{
+    switch (mode)
+    {
+        case SnapMode::bar: return "Bar";
+        case SnapMode::beat: return "Beat";
+        case SnapMode::division: return "Division";
+        case SnapMode::tick: return "Tick";
+        case SnapMode::off: return "Off";
+    }
+
+    return "Division";
+}
+
+juce::String toDisplayString(DragMode mode)
+{
+    switch (mode)
+    {
+        case DragMode::overlap: return "Overlap";
+        case DragMode::noOverlap: return "No Overlap";
+        case DragMode::shuffle: return "Shuffle";
+    }
+
+    return "Overlap";
+}
+
+juce::String toDisplayString(NudgeMode mode)
+{
+    switch (mode)
+    {
+        case NudgeMode::bar: return "Bar";
+        case NudgeMode::beat: return "Beat";
+        case NudgeMode::division: return "Division";
+        case NudgeMode::tick: return "Tick";
+    }
+
+    return "Beat";
 }
 } // namespace cigol
