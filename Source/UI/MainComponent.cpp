@@ -206,7 +206,7 @@ juce::String defaultTrackNameForKind(TrackKind kind, int ordinal)
         case TrackKind::audio: return "Audio " + juce::String(ordinal);
         case TrackKind::midi: return "MIDI " + juce::String(ordinal);
         case TrackKind::instrument: return "Instrument " + juce::String(ordinal);
-        case TrackKind::superColliderRender: return "SC Render " + juce::String(ordinal);
+        case TrackKind::superColliderRender: return "SC Scene " + juce::String(ordinal);
         case TrackKind::folder: return "Folder " + juce::String(ordinal);
     }
 
@@ -220,7 +220,7 @@ juce::String defaultTrackRoleForKind(TrackKind kind)
         case TrackKind::audio: return "Audio Track";
         case TrackKind::midi: return "MIDI Track";
         case TrackKind::instrument: return "Instrument Track";
-        case TrackKind::superColliderRender: return "SuperCollider Render";
+        case TrackKind::superColliderRender: return "SC Scene Track";
         case TrackKind::folder: return "Folder Stack";
     }
 
@@ -285,17 +285,21 @@ int nextGeneratedRegionOrdinal(const TrackState& track)
 
 juce::String defaultSuperColliderRegionName(int ordinal)
 {
-    return ordinal <= 1 ? "Scene Render" : "Scene Render " + juce::String(ordinal);
+    return ordinal <= 1 ? "SC Scene" : "SC Scene " + juce::String(ordinal);
 }
 
 SuperColliderScriptState defaultSuperColliderScriptForRegion(const juce::String& regionName)
 {
     SuperColliderScriptState script;
     script.scriptName = regionName;
-    script.code = "SinOsc.ar(220 ! 2) * 0.15";
+    script.code = "SinOsc.ar(freq ! 2) * amp";
     script.synthDefName = "default";
     script.entryNode = "SynthDef(\\\\default)";
     script.busRouting = "Render -> SC Render Bus A";
+    script.primaryParameterName = "freq";
+    script.primaryParameterValue = 220.0f;
+    script.secondaryParameterName = "amp";
+    script.secondaryParameterValue = 0.15f;
     script.statusLine = "Ready";
     script.consoleOutput = {};
     script.lastRenderPath = {};
@@ -319,7 +323,12 @@ Region makeDefaultSuperColliderRegion(const TrackState& track, double startBeat,
                        0.0,
                        0.0,
                        1.0f,
-                       {} };
+                       {},
+                       false,
+                       0.0,
+                       false,
+                       0.0,
+                       std::nullopt };
     generated.superColliderScript = defaultSuperColliderScriptForRegion(generated.name);
     return generated;
 }
@@ -337,8 +346,20 @@ void refreshIndependentSuperColliderScriptIdentity(Region& region, const juce::S
     script.consoleOutput = {};
     script.lastRenderPath = {};
     script.lastRenderMode = {};
+    script.rendersOfflineStem = false;
     script.errorLine = -1;
     script.lastRunSucceeded = true;
+}
+
+void invalidateRenderedSuperColliderState(SuperColliderScriptState& script)
+{
+    script.rendersOfflineStem = false;
+}
+
+juce::String describeSuperColliderClipParameters(const SuperColliderScriptState& script)
+{
+    return script.primaryParameterName + " " + juce::String(script.primaryParameterValue, 2)
+        + " / " + script.secondaryParameterName + " " + juce::String(script.secondaryParameterValue, 2);
 }
 
 TrackState makeDefaultTrack(TrackKind kind, TrackChannelMode channelMode, int id, int ordinal)
@@ -360,11 +381,11 @@ TrackState makeDefaultTrack(TrackKind kind, TrackChannelMode channelMode, int id
 
     if (kind == TrackKind::audio)
     {
-        track.regions.push_back({ "Audio Clip", track.colour, RegionKind::audio, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+        track.regions.push_back({ "Audio Clip", track.colour, RegionKind::audio, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt });
     }
     else if (kind == TrackKind::midi)
     {
-        Region region { "MIDI Clip", track.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} };
+        Region region { "MIDI Clip", track.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt };
         region.midiNotes = {
             { 60, 0.0, 1.0, 100, false },
             { 64, 1.0, 1.0, 100, false },
@@ -374,7 +395,7 @@ TrackState makeDefaultTrack(TrackKind kind, TrackChannelMode channelMode, int id
     }
     else if (kind == TrackKind::instrument)
     {
-        Region region { "Instrument Clip", track.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} };
+        Region region { "Instrument Clip", track.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt };
         region.midiNotes = {
             { 48, 0.0, 2.0, 108, false },
             { 55, 0.0, 2.0, 102, false },
@@ -668,13 +689,17 @@ public:
           onTransportEdited(std::move(onTransportEditedToUse))
     {
         configureSectionButton(trackListButton, "Tracks", [this] { if (onToggleTrackList != nullptr) onToggleTrackList(); });
-        configureSectionButton(inspectorButton, "Inspector", [this] { if (onToggleInspector != nullptr) onToggleInspector(); });
-        configureSectionButton(editorsButton, "Editors", [this] { if (onShowEditors != nullptr) onShowEditors(); });
-        configureSectionButton(mixerButton, "Mixer", [this] { if (onShowMixer != nullptr) onShowMixer(); });
+        configureSectionButton(inspectorButton, "Insp", [this] { if (onToggleInspector != nullptr) onToggleInspector(); });
+        configureSectionButton(editorsButton, "Edit", [this] { if (onShowEditors != nullptr) onShowEditors(); });
+        configureSectionButton(mixerButton, "Mix", [this] { if (onShowMixer != nullptr) onShowMixer(); });
         configureSectionButton(addTrackButton, "+", [this] { if (onAddTrack != nullptr) onAddTrack(); });
         addTrackButton.setTooltip("Add Track");
         configureSectionButton(toolButton, juce::String(CharPointer_UTF8("\xE2\x9C\x8E")), [this] { showToolMenu(); });
         toolButton.setTooltip(describeToolSettings());
+        trackListButton.setTooltip("Show or hide the track list");
+        inspectorButton.setTooltip("Show or hide the inspector");
+        editorsButton.setTooltip("Show the editor pane");
+        mixerButton.setTooltip("Show the mixer pane");
 
         configureTransportButton(backButton, "|<", [this] { state.playheadBeat = std::max(1.0, state.playheadBeat - 4.0); });
         configureButton(playButton, "Play", [this] { state.playing = ! state.playing; refreshButtonStates(); });
@@ -695,8 +720,15 @@ public:
             refreshButtonStates();
             notifyTransportEdited();
         });
-        configureTransportButton(metronomeButton, "Click", [this] { state.metronomeEnabled = ! state.metronomeEnabled; refreshButtonStates(); });
-        configureTransportButton(countInButton, "Count", [this] { state.countInEnabled = ! state.countInEnabled; refreshButtonStates(); });
+        configureTransportButton(metronomeButton, "Clk", [this] { state.metronomeEnabled = ! state.metronomeEnabled; refreshButtonStates(); });
+        configureTransportButton(countInButton, "Cnt", [this] { state.countInEnabled = ! state.countInEnabled; refreshButtonStates(); });
+        backButton.setTooltip("Return toward the start");
+        playButton.setTooltip("Play or pause");
+        stopButton.setTooltip("Stop and return to the start");
+        recordButton.setTooltip("Record");
+        cycleButton.setTooltip("Toggle cycle playback");
+        metronomeButton.setTooltip("Toggle the metronome");
+        countInButton.setTooltip("Toggle count-in");
 
         configureDisplayLabel(positionTitleLabel, "Position");
         configureDisplayLabel(tempoTitleLabel, "Tempo");
@@ -813,11 +845,11 @@ public:
         viewButtons.removeFromLeft(4);
         trackListButton.setBounds(viewButtons.removeFromLeft(78).reduced(3, 1));
         viewButtons.removeFromLeft(4);
-        inspectorButton.setBounds(viewButtons.removeFromLeft(88).reduced(3, 1));
+        inspectorButton.setBounds(viewButtons.removeFromLeft(72).reduced(3, 1));
         viewButtons.removeFromLeft(4);
-        editorsButton.setBounds(viewButtons.removeFromLeft(80).reduced(3, 1));
+        editorsButton.setBounds(viewButtons.removeFromLeft(68).reduced(3, 1));
         viewButtons.removeFromLeft(4);
-        mixerButton.setBounds(viewButtons.removeFromLeft(72).reduced(3, 1));
+        mixerButton.setBounds(viewButtons.removeFromLeft(60).reduced(3, 1));
 
         auto center = area.removeFromLeft(520);
         auto transportRow = center.removeFromTop(28);
@@ -831,9 +863,9 @@ public:
         transportRow.removeFromLeft(8);
         cycleButton.setBounds(transportRow.removeFromLeft(66).reduced(3, 1));
         transportRow.removeFromLeft(4);
-        metronomeButton.setBounds(transportRow.removeFromLeft(62).reduced(3, 1));
+        metronomeButton.setBounds(transportRow.removeFromLeft(52).reduced(3, 1));
         transportRow.removeFromLeft(4);
-        countInButton.setBounds(transportRow.removeFromLeft(62).reduced(3, 1));
+        countInButton.setBounds(transportRow.removeFromLeft(52).reduced(3, 1));
         auto lcdArea = area;
         const auto spacing = 6;
         const auto panelWidth = juce::jmax(82, (lcdArea.getWidth() - (spacing * 5)) / 6);
@@ -2575,7 +2607,21 @@ private:
             if (regionSelected)
                 brightness = jmin(1.0f, brightness + 0.12f);
 
-            g.setColour(region.colour.withSaturation(0.65f).withBrightness(brightness));
+            const auto isSuperColliderClip = track.kind == TrackKind::superColliderRender
+                && region.kind == RegionKind::generated
+                && region.superColliderScript.has_value();
+            const auto isRenderedSuperColliderClip = isSuperColliderClip
+                && region.superColliderScript->rendersOfflineStem
+                && region.superColliderScript->lastRenderPath.isNotEmpty();
+            auto fillColour = region.colour.withSaturation(0.65f).withBrightness(brightness);
+            if (isSuperColliderClip)
+            {
+                fillColour = isRenderedSuperColliderClip
+                    ? region.colour.withSaturation(0.36f).withBrightness(jmin(1.0f, brightness - 0.05f))
+                    : region.colour.withSaturation(0.78f).withBrightness(jmin(1.0f, brightness + 0.02f));
+            }
+
+            g.setColour(fillColour);
             g.fillRoundedRectangle(regionBounds.toFloat(), 8.0f);
 
             if (regionSelected)
@@ -2652,13 +2698,29 @@ private:
             g.setColour(Colours::white.withAlpha(0.62f));
             auto footer = regionBounds.removeFromBottom(18).reduced(10, 0);
             auto footerText = describeRegionKind(region.kind);
+            if (isSuperColliderClip)
+                footerText = isRenderedSuperColliderClip ? "SC rendered" : "SC live";
             if (region.kind == RegionKind::audio && region.sourceFilePath.isNotEmpty())
                 footerText += " | clip linked";
             if (region.kind == RegionKind::audio)
                 footerText += " | gain " + String(region.gain, 2) + "x";
+            if (isSuperColliderClip)
+                footerText += " | " + shortenForSidebar(describeSuperColliderClipParameters(*region.superColliderScript), 28);
             if (region.loopEnabled)
                 footerText += " | loop " + String(region.loopLengthInBeats, 2) + " beats";
             g.drawText(footerText, footer, Justification::centredLeft, false);
+
+            if (isSuperColliderClip)
+            {
+                auto badge = regionBounds.withTrimmedLeft(regionBounds.getWidth() - 78).withHeight(20).translated(-10, 8);
+                g.setColour(isRenderedSuperColliderClip
+                                ? Colour::fromRGB(110, 198, 184).withAlpha(0.92f)
+                                : Colour::fromRGB(150, 116, 255).withAlpha(0.92f));
+                g.fillRoundedRectangle(badge.toFloat(), 6.0f);
+                g.setColour(Colours::white.withAlpha(0.96f));
+                g.setFont(FontOptions(10.0f, Font::bold));
+                g.drawText(isRenderedSuperColliderClip ? "PRINTED" : "LIVE SC", badge, Justification::centred, false);
+            }
 
             if (region.loopEnabled && region.loopLengthInBeats > 0.0 && region.lengthInBeats > region.loopLengthInBeats)
             {
@@ -3359,7 +3421,7 @@ public:
 
     void paint(Graphics& g) override
     {
-        g.fillAll(Colour::fromRGB(18, 21, 27));
+        g.fillAll(Colour::fromRGB(16, 24, 38));
 
         auto* region = session.getSelectedRegion();
         if (region == nullptr || ! hasEditableMidiRegion())
@@ -3846,7 +3908,7 @@ public:
     void paint(Graphics& g) override
     {
         auto area = getLocalBounds();
-        g.fillAll(Colour::fromRGB(22, 25, 32));
+        g.fillAll(Colour::fromRGB(28, 24, 26));
         g.setColour(Colours::white.withAlpha(0.06f));
         g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 10.0f, 1.0f);
 
@@ -3887,7 +3949,7 @@ public:
         if (region->sourceFilePath.isEmpty())
         {
             g.setColour(Colours::white.withAlpha(0.50f));
-            g.drawText("No file assigned to this audio region.", waveformArea, Justification::centred, true);
+            g.drawText("No audio file has been assigned to this clip yet.", waveformArea, Justification::centred, true);
         }
         else if (auto* thumbnail = getThumbnailForFile(region->sourceFilePath))
         {
@@ -3911,9 +3973,9 @@ public:
             const auto fadeInWidth = static_cast<float>(drawArea.getWidth()) * static_cast<float>(region->fadeInBeats / juce::jmax(0.001, region->lengthInBeats));
             const auto fadeOutWidth = static_cast<float>(drawArea.getWidth()) * static_cast<float>(region->fadeOutBeats / juce::jmax(0.001, region->lengthInBeats));
             g.setColour(Colours::white.withAlpha(0.32f));
-            g.drawLine(drawArea.getX() + 8.0f,
+            g.drawLine(static_cast<float>(drawArea.getX()) + 8.0f,
                        static_cast<float>(drawArea.getBottom() - 10),
-                       drawArea.getX() + juce::jmax(8.0f, fadeInWidth),
+                       static_cast<float>(drawArea.getX()) + juce::jmax(8.0f, fadeInWidth),
                        static_cast<float>(drawArea.getY() + 10),
                        1.4f);
             g.drawLine(static_cast<float>(drawArea.getRight()) - juce::jmax(8.0f, fadeOutWidth),
@@ -4022,7 +4084,7 @@ public:
                                      std::function<void()> onRunToUse,
                                      std::function<void()> onStopToUse,
                                      std::function<void()> onApplyToUse,
-                                     std::function<void(juce::Component&)> onRenderToUse)
+                                     std::function<void(SuperColliderRenderMode)> onRenderToUse)
         : session(sessionToUse),
           onEdit(std::move(onEditToUse)),
           onRun(std::move(onRunToUse)),
@@ -4039,10 +4101,14 @@ public:
         codeEditor->setTabSize(4, true);
         codeEditor->setFont(FontOptions(15.0f));
 
-        configureMetaEditor(scriptNameEditor, "Script name");
+        configureMetaEditor(scriptNameEditor, "Clip name");
         configureMetaEditor(synthDefEditor, "SynthDef");
-        configureMetaEditor(entryNodeEditor, "Entry node");
+        configureMetaEditor(entryNodeEditor, "Start node");
         configureMetaEditor(routingEditor, "Routing");
+        configureMetaEditor(primaryParameterNameEditor, "P1");
+        configureMetaEditor(secondaryParameterNameEditor, "P2");
+        configureParameterSlider(primaryParameterSlider, 0.0, 20000.0);
+        configureParameterSlider(secondaryParameterSlider, 0.0, 1.0);
         scriptNameEditor.onTextChange = [this]
         {
             if (isSyncingEditorText)
@@ -4053,6 +4119,7 @@ public:
                 if (script->scriptName != value)
                 {
                     script->scriptName = value;
+                    invalidateRenderedSuperColliderState(*script);
                     if (onEdit != nullptr)
                         onEdit();
                 }
@@ -4068,6 +4135,7 @@ public:
                 if (script->synthDefName != value)
                 {
                     script->synthDefName = value;
+                    invalidateRenderedSuperColliderState(*script);
                     if (onEdit != nullptr)
                         onEdit();
                 }
@@ -4083,6 +4151,7 @@ public:
                 if (script->entryNode != value)
                 {
                     script->entryNode = value;
+                    invalidateRenderedSuperColliderState(*script);
                     if (onEdit != nullptr)
                         onEdit();
                 }
@@ -4098,6 +4167,71 @@ public:
                 if (script->busRouting != value)
                 {
                     script->busRouting = value;
+                    invalidateRenderedSuperColliderState(*script);
+                    if (onEdit != nullptr)
+                        onEdit();
+                }
+            }
+        };
+        primaryParameterNameEditor.onTextChange = [this]
+        {
+            if (isSyncingEditorText)
+                return;
+            if (auto* script = getSelectedScript())
+            {
+                const auto value = primaryParameterNameEditor.getText().trim();
+                if (script->primaryParameterName != value)
+                {
+                    script->primaryParameterName = value.isNotEmpty() ? value : juce::String("paramA");
+                    invalidateRenderedSuperColliderState(*script);
+                    if (onEdit != nullptr)
+                        onEdit();
+                }
+            }
+        };
+        secondaryParameterNameEditor.onTextChange = [this]
+        {
+            if (isSyncingEditorText)
+                return;
+            if (auto* script = getSelectedScript())
+            {
+                const auto value = secondaryParameterNameEditor.getText().trim();
+                if (script->secondaryParameterName != value)
+                {
+                    script->secondaryParameterName = value.isNotEmpty() ? value : juce::String("paramB");
+                    invalidateRenderedSuperColliderState(*script);
+                    if (onEdit != nullptr)
+                        onEdit();
+                }
+            }
+        };
+        primaryParameterSlider.onValueChange = [this]
+        {
+            if (isSyncingEditorText)
+                return;
+            if (auto* script = getSelectedScript())
+            {
+                const auto value = static_cast<float>(primaryParameterSlider.getValue());
+                if (std::abs(script->primaryParameterValue - value) > 0.0001f)
+                {
+                    script->primaryParameterValue = value;
+                    invalidateRenderedSuperColliderState(*script);
+                    if (onEdit != nullptr)
+                        onEdit();
+                }
+            }
+        };
+        secondaryParameterSlider.onValueChange = [this]
+        {
+            if (isSyncingEditorText)
+                return;
+            if (auto* script = getSelectedScript())
+            {
+                const auto value = static_cast<float>(secondaryParameterSlider.getValue());
+                if (std::abs(script->secondaryParameterValue - value) > 0.0001f)
+                {
+                    script->secondaryParameterValue = value;
+                    invalidateRenderedSuperColliderState(*script);
                     if (onEdit != nullptr)
                         onEdit();
                 }
@@ -4151,7 +4285,17 @@ public:
         configureActionButton(renderButton, "Render", [this]
         {
             if (onRender != nullptr)
-                onRender(renderButton);
+                onRender(SuperColliderRenderMode::newTrack);
+        });
+        configureActionButton(renderReplaceButton, "Replace", [this]
+        {
+            if (onRender != nullptr)
+                onRender(SuperColliderRenderMode::replacePrintTrack);
+        });
+        configureActionButton(renderCycleButton, "Cycle", [this]
+        {
+            if (onRender != nullptr)
+                onRender(SuperColliderRenderMode::cycleToNewTrack);
         });
         configureActionButton(revealRenderButton, "Reveal", [this]
         {
@@ -4182,9 +4326,15 @@ public:
         addAndMakeVisible(synthDefEditor);
         addAndMakeVisible(entryNodeEditor);
         addAndMakeVisible(routingEditor);
+        addAndMakeVisible(primaryParameterNameEditor);
+        addAndMakeVisible(primaryParameterSlider);
+        addAndMakeVisible(secondaryParameterNameEditor);
+        addAndMakeVisible(secondaryParameterSlider);
         addAndMakeVisible(enabledToggle);
         addAndMakeVisible(*codeEditor);
         addAndMakeVisible(outputConsole);
+        addAndMakeVisible(renderReplaceButton);
+        addAndMakeVisible(renderCycleButton);
     }
 
     ~SuperColliderCodeEditorComponent() override
@@ -4207,10 +4357,14 @@ public:
     {
         auto area = getLocalBounds().reduced(12);
         auto header = area.removeFromTop(36);
-        auto buttonRow = header.removeFromRight(314);
+        auto buttonRow = header.removeFromRight(400);
         applyButton.setBounds(buttonRow.removeFromRight(72).reduced(0, 1));
         buttonRow.removeFromRight(8);
         renderButton.setBounds(buttonRow.removeFromRight(78).reduced(0, 1));
+        buttonRow.removeFromRight(8);
+        renderReplaceButton.setBounds(buttonRow.removeFromRight(80).reduced(0, 1));
+        buttonRow.removeFromRight(8);
+        renderCycleButton.setBounds(buttonRow.removeFromRight(70).reduced(0, 1));
         buttonRow.removeFromRight(8);
         stopButton.setBounds(buttonRow.removeFromRight(68).reduced(0, 1));
         buttonRow.removeFromRight(8);
@@ -4227,6 +4381,16 @@ public:
         routingEditor.setBounds(metaRow.removeFromLeft(juce::jmax(120, metaRow.getWidth() - 92)));
         metaRow.removeFromLeft(8);
         enabledToggle.setBounds(metaRow.removeFromLeft(84));
+
+        area.removeFromTop(8);
+        auto parameterRow = area.removeFromTop(32);
+        primaryParameterNameEditor.setBounds(parameterRow.removeFromLeft(74));
+        parameterRow.removeFromLeft(8);
+        primaryParameterSlider.setBounds(parameterRow.removeFromLeft(juce::jmin(180, parameterRow.getWidth() / 2 - 12)));
+        parameterRow.removeFromLeft(12);
+        secondaryParameterNameEditor.setBounds(parameterRow.removeFromLeft(74));
+        parameterRow.removeFromLeft(8);
+        secondaryParameterSlider.setBounds(parameterRow.removeFromLeft(juce::jmax(120, parameterRow.getWidth())));
 
         area.removeFromTop(10);
         auto outputArea = area.removeFromBottom(164);
@@ -4252,7 +4416,7 @@ public:
 
         g.setColour(Colours::white.withAlpha(0.90f));
         g.setFont(FontOptions(15.0f, Font::bold));
-        g.drawText("SuperCollider Code", header.removeFromLeft(166), Justification::centredLeft, false);
+        g.drawText("SC Script", header.removeFromLeft(166), Justification::centredLeft, false);
 
         if (const auto* script = getSelectedScript())
         {
@@ -4262,7 +4426,9 @@ public:
             g.setColour(Colours::white.withAlpha(0.58f));
             g.setFont(FontOptions(13.0f));
             g.drawText(script->scriptName.isNotEmpty() ? script->scriptName : "Script",
-                       header.removeFromLeft(240), Justification::centredLeft, false);
+                       header.removeFromLeft(180), Justification::centredLeft, false);
+            g.drawText(describeSuperColliderClipParameters(*script),
+                       header.removeFromLeft(280), Justification::centredLeft, false);
             g.setColour(statusColour);
             g.setFont(FontOptions(12.0f, Font::bold));
             g.drawText(script->statusLine.isNotEmpty() ? script->statusLine : "Editable script",
@@ -4290,46 +4456,27 @@ public:
             g.setColour(Colours::white.withAlpha(0.48f));
             g.setFont(FontOptions(12.0f));
             g.drawText(script->lastRunSucceeded
-                           ? "Edits are saved with the project and routed through this SuperCollider track."
-                           : "The latest SuperCollider run failed. The editor jumps to the reported line when possible.",
+                           ? "This clip keeps its own script, settings, and render history with the project."
+                           : "The latest script run failed. The editor jumps to the reported line when possible.",
                        footer.removeFromTop(18), Justification::centredLeft, false);
             const auto renderSummary = script->lastRenderPath.isNotEmpty()
                 ? "Last render: " + (script->lastRenderMode.isNotEmpty() ? script->lastRenderMode + " / " : "")
                     + shortenForSidebar(script->lastRenderPath, 88)
-                : "No rendered audio file yet for this clip.";
+                : "This clip has not been rendered to audio yet.";
             g.drawText(renderSummary,
                        footer.removeFromTop(18), Justification::centredLeft, false);
-            g.drawText("Console output below reflects the latest Run, Stop, Apply, or Render action.",
+            g.drawText("Clip parameters are applied before preview or render. The console below shows the latest run, stop, apply, or render result.",
                        footer.removeFromTop(18), Justification::centredLeft, false);
         }
         else
         {
             g.setColour(Colours::white.withAlpha(0.52f));
             g.setFont(FontOptions(13.0f));
-            g.drawText("Select a SuperCollider clip to open its code.", content, Justification::centred, true);
+            g.drawText("Select an SC clip to open its script.", content, Justification::centred, true);
         }
     }
 
 private:
-    void paintInfoChip(Graphics& g, Rectangle<int> area, const juce::String& label, const juce::String& value) const
-    {
-        auto chip = area.reduced(0, 1).toFloat();
-        g.setColour(Colour::fromRGB(38, 43, 54));
-        g.fillRoundedRectangle(chip, 7.0f);
-        g.setColour(Colours::white.withAlpha(0.10f));
-        g.drawRoundedRectangle(chip.reduced(0.5f), 7.0f, 1.0f);
-
-        auto chipBounds = area.reduced(10, 4);
-        auto labelArea = chipBounds.removeFromTop(10);
-        g.setColour(Colours::white.withAlpha(0.42f));
-        g.setFont(FontOptions(10.0f, Font::bold));
-        g.drawText(label.toUpperCase(), labelArea, Justification::centredLeft, false);
-
-        g.setColour(Colours::white.withAlpha(0.84f));
-        g.setFont(FontOptions(12.0f, Font::bold));
-        g.drawText(value, chipBounds, Justification::centredLeft, false);
-    }
-
     void configureActionButton(juce::TextButton& button, const juce::String& text, std::function<void()> action)
     {
         button.setButtonText(text);
@@ -4350,6 +4497,16 @@ private:
         editorToConfigure.setColour(juce::TextEditor::focusedOutlineColourId, Colour::fromRGB(96, 124, 172));
         editorToConfigure.setColour(juce::TextEditor::textColourId, Colours::white.withAlpha(0.90f));
         editorToConfigure.setFont(FontOptions(12.5f, Font::bold));
+    }
+
+    void configureParameterSlider(juce::Slider& slider, double min, double max)
+    {
+        slider.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 66, 20);
+        slider.setRange(min, max, 0.01);
+        slider.setColour(juce::Slider::trackColourId, Colour::fromRGB(255, 164, 77));
+        slider.setColour(juce::Slider::thumbColourId, Colours::white.withAlpha(0.92f));
+        slider.setColour(juce::Slider::backgroundColourId, Colour::fromRGB(39, 45, 57));
     }
 
     int countLines(const juce::String& text) const
@@ -4396,6 +4553,10 @@ private:
         const auto desiredSynthDef = script != nullptr ? script->synthDefName : juce::String();
         const auto desiredEntryNode = script != nullptr ? script->entryNode : juce::String();
         const auto desiredRouting = script != nullptr ? script->busRouting : juce::String();
+        const auto desiredPrimaryParameterName = script != nullptr ? script->primaryParameterName : juce::String();
+        const auto desiredPrimaryParameterValue = script != nullptr ? script->primaryParameterValue : 220.0f;
+        const auto desiredSecondaryParameterName = script != nullptr ? script->secondaryParameterName : juce::String();
+        const auto desiredSecondaryParameterValue = script != nullptr ? script->secondaryParameterValue : 0.15f;
         const auto desiredOutput = script != nullptr ? script->consoleOutput : juce::String();
         const auto desiredEnabled = script != nullptr && script->enabled;
         const auto hasRenderedFile = script != nullptr
@@ -4410,6 +4571,12 @@ private:
             entryNodeEditor.setText(desiredEntryNode, false);
         if (routingEditor.getText() != desiredRouting)
             routingEditor.setText(desiredRouting, false);
+        if (primaryParameterNameEditor.getText() != desiredPrimaryParameterName)
+            primaryParameterNameEditor.setText(desiredPrimaryParameterName, false);
+        if (secondaryParameterNameEditor.getText() != desiredSecondaryParameterName)
+            secondaryParameterNameEditor.setText(desiredSecondaryParameterName, false);
+        primaryParameterSlider.setValue(desiredPrimaryParameterValue, juce::dontSendNotification);
+        secondaryParameterSlider.setValue(desiredSecondaryParameterValue, juce::dontSendNotification);
         if (outputConsole.getText() != desiredOutput)
             outputConsole.setText(desiredOutput, false);
         enabledToggle.setToggleState(desiredEnabled, juce::dontSendNotification);
@@ -4426,10 +4593,16 @@ private:
         synthDefEditor.setEnabled(script != nullptr);
         entryNodeEditor.setEnabled(script != nullptr);
         routingEditor.setEnabled(script != nullptr);
+        primaryParameterNameEditor.setEnabled(script != nullptr);
+        secondaryParameterNameEditor.setEnabled(script != nullptr);
+        primaryParameterSlider.setEnabled(script != nullptr);
+        secondaryParameterSlider.setEnabled(script != nullptr);
         enabledToggle.setEnabled(script != nullptr);
         outputConsole.setEnabled(script != nullptr);
         revealRenderButton.setEnabled(hasRenderedFile);
         openRenderButton.setEnabled(hasRenderedFile);
+        renderReplaceButton.setEnabled(script != nullptr);
+        renderCycleButton.setEnabled(script != nullptr && session.transport.cycleEnabled);
 
         if (script != nullptr && codeEditor != nullptr)
         {
@@ -4473,6 +4646,7 @@ private:
             if (script->code != newText)
             {
                 script->code = newText;
+                invalidateRenderedSuperColliderState(*script);
                 if (onEdit != nullptr)
                     onEdit();
             }
@@ -4484,7 +4658,7 @@ private:
     std::function<void()> onRun;
     std::function<void()> onStop;
     std::function<void()> onApply;
-    std::function<void(juce::Component&)> onRender;
+    std::function<void(SuperColliderRenderMode)> onRender;
     SuperColliderCodeTokeniser tokeniser;
     juce::CodeDocument codeDocument;
     std::unique_ptr<juce::CodeEditorComponent> codeEditor;
@@ -4492,12 +4666,18 @@ private:
     juce::TextEditor synthDefEditor;
     juce::TextEditor entryNodeEditor;
     juce::TextEditor routingEditor;
+    juce::TextEditor primaryParameterNameEditor;
+    juce::TextEditor secondaryParameterNameEditor;
+    juce::Slider primaryParameterSlider;
+    juce::Slider secondaryParameterSlider;
     juce::TextEditor outputConsole;
     juce::ToggleButton enabledToggle;
     juce::TextButton runButton;
     juce::TextButton stopButton;
     juce::TextButton applyButton;
     juce::TextButton renderButton;
+    juce::TextButton renderReplaceButton;
+    juce::TextButton renderCycleButton;
     juce::TextButton revealRenderButton;
     juce::TextButton openRenderButton;
     bool isSyncingEditorText { false };
@@ -4513,6 +4693,7 @@ public:
                        std::function<void()> onClearAudioFileToUse,
                        std::function<void()> onDuplicateRegionToUse,
                        std::function<void()> onCreateSuperColliderClipToUse,
+                       std::function<void(SuperColliderRenderMode)> onRenderSuperColliderClipToUse,
                        std::function<void()> onToggleRegionLoopingToUse,
                        std::function<void(int)> onLoadAudioUnitToUse,
                        std::function<void(int)> onOpenAudioUnitToUse,
@@ -4526,6 +4707,7 @@ public:
           onClearAudioFile(std::move(onClearAudioFileToUse)),
           onDuplicateRegion(std::move(onDuplicateRegionToUse)),
           onCreateSuperColliderClip(std::move(onCreateSuperColliderClipToUse)),
+          onRenderSuperColliderClip(std::move(onRenderSuperColliderClipToUse)),
           onToggleRegionLooping(std::move(onToggleRegionLoopingToUse)),
           onLoadAudioUnit(std::move(onLoadAudioUnitToUse)),
           onOpenAudioUnit(std::move(onOpenAudioUnitToUse)),
@@ -4540,6 +4722,7 @@ public:
         audioRegionLabel.setFont(FontOptions(15.0f, Font::bold));
         audioFileLabel.setFont(FontOptions(13.0f));
         regionActionsLabel.setFont(FontOptions(13.0f, Font::bold));
+        scClipRenderLabel.setFont(FontOptions(13.0f, Font::bold));
         regionGainLabel.setFont(FontOptions(13.0f, Font::bold));
         pluginValueLabel.setFont(FontOptions(12.0f, Font::bold));
         pluginLaneNameLabel.setFont(FontOptions(12.0f, Font::bold));
@@ -4667,9 +4850,9 @@ public:
         scInsertMetersLabel.setText("SC insert", dontSendNotification);
         scInsertWetLabel.setText("Wet / Dry", dontSendNotification);
         scInsertTrimLabel.setText("Output trim", dontSendNotification);
-        regionActionsLabel.setText("Region actions", dontSendNotification);
+        regionActionsLabel.setText("Clip actions", dontSendNotification);
         loopModeLabel.setText("Looping", dontSendNotification);
-        scInsertBypassButton.setButtonText("SC Bypass");
+        scInsertBypassButton.setButtonText("Bypass SC");
         pluginLaneActionsLabel.setText("Lane actions", dontSendNotification);
         addPluginAutomationButton.setButtonText("Add");
         addPluginAutomationButton.setColour(TextButton::buttonColourId, Colour::fromRGB(67, 73, 88));
@@ -4917,42 +5100,74 @@ public:
 
         loopModeButton.setColour(TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
         loopModeButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+        loopModeButton.setTooltip("Toggle looping for this clip");
         loopModeButton.onClick = [this]
         {
             if (onToggleRegionLooping != nullptr)
                 onToggleRegionLooping();
         };
 
-        duplicateRegionButton.setButtonText("Duplicate Clip");
+        duplicateRegionButton.setButtonText("Duplicate");
         duplicateRegionButton.setColour(TextButton::buttonColourId, Colour::fromRGB(67, 73, 88));
         duplicateRegionButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.90f));
+        duplicateRegionButton.setTooltip("Duplicate the selected clip");
         duplicateRegionButton.onClick = [this]
         {
             if (onDuplicateRegion != nullptr)
                 onDuplicateRegion();
         };
 
-        newSuperColliderClipButton.setButtonText("New SC Clip");
+        newSuperColliderClipButton.setButtonText("New SC");
         newSuperColliderClipButton.setColour(TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
         newSuperColliderClipButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+        newSuperColliderClipButton.setTooltip("Create a new SuperCollider scene clip");
         newSuperColliderClipButton.onClick = [this]
         {
             if (onCreateSuperColliderClip != nullptr)
                 onCreateSuperColliderClip();
         };
+        auto configureScRenderButton = [] (TextButton& button, const juce::String& text)
+        {
+            button.setButtonText(text);
+            button.setColour(TextButton::buttonColourId, Colour::fromRGB(67, 73, 88));
+            button.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.90f));
+        };
+        configureScRenderButton(renderScClipButton, "Render");
+        configureScRenderButton(renderReplaceScClipButton, "Replace");
+        configureScRenderButton(renderCycleScClipButton, "Cycle");
+        renderScClipButton.setTooltip("Render this SC clip to a new audio track");
+        renderReplaceScClipButton.setTooltip("Render this SC clip and replace its print track");
+        renderCycleScClipButton.setTooltip("Render this SC clip across the cycle range");
+        renderScClipButton.onClick = [this]
+        {
+            if (onRenderSuperColliderClip != nullptr)
+                onRenderSuperColliderClip(SuperColliderRenderMode::newTrack);
+        };
+        renderReplaceScClipButton.onClick = [this]
+        {
+            if (onRenderSuperColliderClip != nullptr)
+                onRenderSuperColliderClip(SuperColliderRenderMode::replacePrintTrack);
+        };
+        renderCycleScClipButton.onClick = [this]
+        {
+            if (onRenderSuperColliderClip != nullptr)
+                onRenderSuperColliderClip(SuperColliderRenderMode::cycleToNewTrack);
+        };
 
-        assignAudioButton.setButtonText("Assign Clip File");
+        assignAudioButton.setButtonText("Choose");
         assignAudioButton.setColour(TextButton::buttonColourId, Colour::fromRGB(76, 86, 106));
         assignAudioButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.92f));
+        assignAudioButton.setTooltip("Choose an audio file for this clip");
         assignAudioButton.onClick = [this]
         {
             if (onAssignAudioFile != nullptr)
                 onAssignAudioFile();
         };
 
-        clearAudioButton.setButtonText("Clear File");
+        clearAudioButton.setButtonText("Remove");
         clearAudioButton.setColour(TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
         clearAudioButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+        clearAudioButton.setTooltip("Remove the current audio file from this clip");
         clearAudioButton.onClick = [this]
         {
             if (onClearAudioFile != nullptr)
@@ -4960,6 +5175,7 @@ public:
         };
         warpModeButton.setColour(TextButton::buttonColourId, Colour::fromRGB(54, 60, 74));
         warpModeButton.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+        warpModeButton.setTooltip("Toggle natural-speed playback or warp/flex playback");
         warpModeButton.onClick = [this]
         {
             if (auto* region = session.getSelectedRegion())
@@ -5229,7 +5445,7 @@ public:
         constexpr int marginVertical = 32;
         constexpr int sectionSpacing = 12;
         constexpr int sectionHeaderHeight = 34;
-        constexpr int clipBodyExpandedHeight = 292;
+        constexpr int clipBodyExpandedHeight = 360;
         constexpr int trackBodyExpandedHeight = 368;
         constexpr int channelBodyExpandedHeight = 900;
 
@@ -5319,9 +5535,9 @@ public:
                 pluginValueSlider.setValue(getSelectedPluginAutomationValue(*track), dontSendNotification);
                 pluginLaneNameEditor.setText(pluginLane->displayName, false);
                 if (! bindingStatus.slotAvailable)
-                    pluginLaneStatusLabel.setText("Saved target is missing: slot not available.", dontSendNotification);
+                    pluginLaneStatusLabel.setText("This lane lost its slot target.", dontSendNotification);
                 else if (! bindingStatus.parameterAvailable)
-                    pluginLaneStatusLabel.setText("Saved target is missing: parameter not available. Use Remap.", dontSendNotification);
+                    pluginLaneStatusLabel.setText("This lane lost its parameter target. Use Remap.", dontSendNotification);
                 else
                     pluginLaneStatusLabel.setText("Bound to " + bindingStatus.resolvedName, dontSendNotification);
                 remapPluginLaneButton.setEnabled(! audioEngine.getAutomatableParameters(track->id).empty());
@@ -5342,10 +5558,11 @@ public:
                 audioRegionLabel.setText("Selected clip: " + region->name, dontSendNotification);
                 audioFileLabel.setText(region->sourceFilePath.isNotEmpty()
                                            ? "File: " + shortenForSidebar(region->sourceFilePath, 60)
-                                           : "File: none assigned",
+                                           : "File: no file chosen",
                                        dontSendNotification);
                 audioFileLabel.setTooltip(region->sourceFilePath);
-                regionActionsLabel.setText("Region actions", dontSendNotification);
+                regionActionsLabel.setText("Clip actions", dontSendNotification);
+                scClipRenderLabel.setText("Render clip", dontSendNotification);
                 regionGainLabel.setText("Clip gain", dontSendNotification);
                 warpModeLabel.setText("Playback", dontSendNotification);
                 warpModeButton.setButtonText(region->warpEnabled ? "Warp / Flex On" : "Natural Speed");
@@ -5357,19 +5574,23 @@ public:
                                                                   projectSecondsForBeat(session, region->startBeat + region->lengthInBeats)
                                                                       - projectSecondsForBeat(session, region->startBeat));
                     warpCacheStatusLabel.setText(audioEngine.isWarpedAudioClipReady(*region, targetDurationSeconds)
-                                                     ? "Warp cache ready"
+                                                     ? "Warp render ready"
                                                      : "Warp render pending",
                                                  dontSendNotification);
                 }
                 else
                 {
-                    warpCacheStatusLabel.setText("Natural-speed playback", dontSendNotification);
+                    warpCacheStatusLabel.setText("Playing at natural speed", dontSendNotification);
                 }
                 regionGainSlider.setValue(region->gain, dontSendNotification);
                 const auto canAssign = region->kind == RegionKind::audio;
                 const auto canCreateScClip = region->kind == RegionKind::generated && track->kind == TrackKind::superColliderRender;
+                const auto canRenderScClip = canCreateScClip && region->superColliderScript.has_value();
                 duplicateRegionButton.setEnabled(true);
                 newSuperColliderClipButton.setEnabled(canCreateScClip);
+                renderScClipButton.setEnabled(canRenderScClip);
+                renderReplaceScClipButton.setEnabled(canRenderScClip);
+                renderCycleScClipButton.setEnabled(canRenderScClip && session.transport.cycleEnabled);
                 assignAudioButton.setEnabled(canAssign);
                 clearAudioButton.setEnabled(canAssign && region->sourceFilePath.isNotEmpty());
                 regionGainSlider.setEnabled(canAssign);
@@ -5378,10 +5599,11 @@ public:
             }
             else
             {
-                audioRegionLabel.setText("Selected clip: none", dontSendNotification);
-                audioFileLabel.setText("Click an audio clip in the arrange area to assign a file.", dontSendNotification);
+                audioRegionLabel.setText("No clip selected", dontSendNotification);
+                audioFileLabel.setText("Select an audio clip to choose a file.", dontSendNotification);
                 audioFileLabel.setTooltip({});
-                regionActionsLabel.setText("Region actions", dontSendNotification);
+                regionActionsLabel.setText("Clip actions", dontSendNotification);
+                scClipRenderLabel.setText("Render clip", dontSendNotification);
                 regionGainLabel.setText("Clip gain", dontSendNotification);
                 warpModeLabel.setText("Playback", dontSendNotification);
                 warpModeButton.setButtonText("Natural Speed");
@@ -5391,6 +5613,9 @@ public:
                 regionGainSlider.setValue(1.0, dontSendNotification);
                 duplicateRegionButton.setEnabled(false);
                 newSuperColliderClipButton.setEnabled(track->kind == TrackKind::superColliderRender);
+                renderScClipButton.setEnabled(false);
+                renderReplaceScClipButton.setEnabled(false);
+                renderCycleScClipButton.setEnabled(false);
                 assignAudioButton.setEnabled(false);
                 clearAudioButton.setEnabled(false);
                 regionGainSlider.setEnabled(false);
@@ -5404,7 +5629,7 @@ public:
                 const auto& insert = track->inserts[static_cast<size_t>(scInsertSlotIndex)];
                 const auto hostedMeters = audioEngine.getHostedInsertMeterState(track->id, scInsertSlotIndex);
                 const auto hostLive = hostedMeters.has_value() && hostedMeters->active;
-                const juce::String statusPrefix = insert.bypassed ? "Bypassed" : (hostLive ? "Host processed" : "Server proxy");
+                const juce::String statusPrefix = insert.bypassed ? "Bypassed" : (hostLive ? "Live in host" : "Server mirror");
                 scInsertMetersLabel.setText("SC insert", dontSendNotification);
                 scInsertStatusLabel.setText(statusPrefix
                                                 + " / "
@@ -5424,12 +5649,12 @@ public:
             else
             {
                 scInsertMetersLabel.setText("SC insert", dontSendNotification);
-                scInsertStatusLabel.setText("No SuperCollider insert on this track.", dontSendNotification);
+                scInsertStatusLabel.setText("This track does not have an SC insert.", dontSendNotification);
                 scInsertWetSlider.setValue(100.0, dontSendNotification);
                 scInsertTrimSlider.setValue(0.0, dontSendNotification);
                 scInsertWetSlider.setEnabled(false);
                 scInsertTrimSlider.setEnabled(false);
-                scInsertBypassButton.setButtonText("SC Bypass");
+                scInsertBypassButton.setButtonText("Bypass SC");
                 scInsertBypassButton.setEnabled(false);
             }
         }
@@ -5442,6 +5667,11 @@ public:
             togglePluginEnabledButton.setEnabled(false);
             rescanPluginsButton.setButtonText(audioEngine.isPluginScanInProgress() ? "Scanning..." : "Rescan");
             rescanPluginsButton.setEnabled(! audioEngine.isPluginScanInProgress());
+            duplicateRegionButton.setEnabled(false);
+            newSuperColliderClipButton.setEnabled(false);
+            renderScClipButton.setEnabled(false);
+            renderReplaceScClipButton.setEnabled(false);
+            renderCycleScClipButton.setEnabled(false);
         }
     }
 
@@ -5523,6 +5753,14 @@ public:
             regionActionRow.removeFromLeft(8);
             newSuperColliderClipButton.setBounds(regionActionRow.removeFromLeft(120).reduced(0, 1));
             clipArea.removeFromTop(8);
+            scClipRenderLabel.setBounds(clipArea.removeFromTop(16));
+            auto scRenderRow = clipArea.removeFromTop(26);
+            renderScClipButton.setBounds(scRenderRow.removeFromLeft(92).reduced(0, 1));
+            scRenderRow.removeFromLeft(8);
+            renderReplaceScClipButton.setBounds(scRenderRow.removeFromLeft(92).reduced(0, 1));
+            scRenderRow.removeFromLeft(8);
+            renderCycleScClipButton.setBounds(scRenderRow.removeFromLeft(84).reduced(0, 1));
+            clipArea.removeFromTop(8);
             warpModeLabel.setBounds(clipArea.removeFromTop(16));
             warpModeButton.setBounds(clipArea.removeFromTop(24).removeFromLeft(136).reduced(0, 1));
             clipArea.removeFromTop(4);
@@ -5544,6 +5782,10 @@ public:
             regionActionsLabel.setBounds({});
             duplicateRegionButton.setBounds({});
             newSuperColliderClipButton.setBounds({});
+            scClipRenderLabel.setBounds({});
+            renderScClipButton.setBounds({});
+            renderReplaceScClipButton.setBounds({});
+            renderCycleScClipButton.setBounds({});
             warpModeLabel.setBounds({});
             warpModeButton.setBounds({});
             warpCacheStatusLabel.setBounds({});
@@ -6082,6 +6324,7 @@ private:
     std::function<void()> onClearAudioFile;
     std::function<void()> onDuplicateRegion;
     std::function<void()> onCreateSuperColliderClip;
+    std::function<void(SuperColliderRenderMode)> onRenderSuperColliderClip;
     std::function<void()> onToggleRegionLooping;
     std::function<void(int)> onLoadAudioUnit;
     std::function<void(int)> onOpenAudioUnit;
@@ -6099,6 +6342,7 @@ private:
     Label audioRegionLabel;
     Label audioFileLabel;
     Label regionActionsLabel;
+    Label scClipRenderLabel;
     Label regionGainLabel;
     Label warpModeLabel;
     Label loopModeLabel;
@@ -6141,6 +6385,9 @@ private:
     TextButton clearAudioButton;
     TextButton duplicateRegionButton;
     TextButton newSuperColliderClipButton;
+    TextButton renderScClipButton;
+    TextButton renderReplaceScClipButton;
+    TextButton renderCycleScClipButton;
     TextButton warpModeButton;
     TextButton loopModeButton;
     TextButton showVolumeAutomationButton;
@@ -6624,6 +6871,7 @@ MainComponent::MainComponent()
                                                      [this] { clearAudioFileFromSelectedRegion(); },
                                                      [this] { duplicateSelectedRegion(); },
                                                      [this] { createNewSuperColliderClip(); },
+                                                     [this] (SuperColliderRenderMode mode) { renderSelectedSuperColliderClipToAudio(mode); },
                                                      [this] { toggleSelectedRegionLooping(); },
                                                      [this] (int slotIndex) { loadAudioUnitIntoSelectedTrack(slotIndex); },
                                                      [this] (int slotIndex) { openAudioUnitEditorForSelectedTrack(slotIndex); },
@@ -6671,24 +6919,9 @@ MainComponent::MainComponent()
                                                                                       superColliderBridge.applyRenderScript(session, track->id, message);
                                                                                       markSessionChanged(false, true);
                                                                                   },
-                                                                                  [this] (juce::Component& sourceButton)
+                                                                                  [this] (SuperColliderRenderMode mode)
                                                                                   {
-                                                                                      juce::PopupMenu menu;
-                                                                                      menu.addItem(1, "New Audio Track");
-                                                                                      menu.addItem(2, "Replace Print Track");
-                                                                                      menu.addItem(3, "Cycle to New Track", session.transport.cycleEnabled);
-
-                                                                                      menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&sourceButton),
-                                                                                                         [this] (int result)
-                                                                                                         {
-                                                                                                             switch (result)
-                                                                                                             {
-                                                                                                                 case 1: renderSelectedSuperColliderClipToAudio(SuperColliderRenderMode::newTrack); break;
-                                                                                                                 case 2: renderSelectedSuperColliderClipToAudio(SuperColliderRenderMode::replacePrintTrack); break;
-                                                                                                                 case 3: renderSelectedSuperColliderClipToAudio(SuperColliderRenderMode::cycleToNewTrack); break;
-                                                                                                                 default: break;
-                                                                                                             }
-                                                                                                         });
+                                                                                      renderSelectedSuperColliderClipToAudio(mode);
                                                                                   });
     lowerPaneSplitter = std::make_unique<LowerPaneSplitterComponent>([this] (int proposedHeight)
     {
@@ -8165,11 +8398,11 @@ void MainComponent::duplicateSelectedTrack(bool includeContent)
             duplicate.regions.clear();
 
             if (duplicate.kind == TrackKind::audio)
-                duplicate.regions.push_back({ "Audio Clip", duplicate.colour, RegionKind::audio, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+                duplicate.regions.push_back({ "Audio Clip", duplicate.colour, RegionKind::audio, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt });
             else if (duplicate.kind == TrackKind::midi)
-                duplicate.regions.push_back({ "MIDI Clip", duplicate.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+                duplicate.regions.push_back({ "MIDI Clip", duplicate.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt });
             else if (duplicate.kind == TrackKind::instrument)
-                duplicate.regions.push_back({ "Instrument Clip", duplicate.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} });
+                duplicate.regions.push_back({ "Instrument Clip", duplicate.colour, RegionKind::midi, 1.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt });
             else if (duplicate.kind == TrackKind::superColliderRender)
                 duplicate.regions.push_back(makeDefaultSuperColliderRegion(duplicate, 1.0, 8.0));
         }
@@ -8355,7 +8588,12 @@ void MainComponent::renderSelectedSuperColliderClipToAudio(SuperColliderRenderMo
                            0.0,
                            0.0,
                            1.0f,
-                           {} };
+                           {},
+                           false,
+                           0.0,
+                           false,
+                           0.0,
+                           std::nullopt };
     if (const auto duration = readAudioFileDurationSeconds(renderedFile))
         printedRegion.sourceDurationSeconds = *duration;
 
@@ -9026,7 +9264,7 @@ void MainComponent::updateWindowState()
 
     auto projectName = currentProjectPath.isNotEmpty()
         ? juce::File(currentProjectPath).getFileNameWithoutExtension()
-        : juce::String("Untitled cigoL Project");
+        : juce::String("Untitled Project");
     transport->setProjectStatus(projectName,
                                 sessionDirty || undoSnapshotPending);
 
@@ -9058,7 +9296,7 @@ void MainComponent::updateWindowState()
         else if (region->kind == RegionKind::audio)
             editorLabel = "Audio File Editor / " + region->name;
         else if (isSuperColliderEditor)
-            editorLabel = "SuperCollider Code / " + region->name;
+            editorLabel = "SC Script / " + region->name;
         else
             editorLabel = "Piano Roll / " + region->name;
     }

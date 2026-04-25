@@ -1,6 +1,6 @@
 # cigoL
 
-A JUCE desktop DAW foundation aimed at a Logic Pro style workflow, with SuperCollider treated as a first-class engine feature rather than an afterthought.
+A JUCE desktop DAW foundation aimed at a polished pro-DAW workflow, with SuperCollider treated as a first-class engine feature rather than an afterthought.
 
 Current app structure:
 

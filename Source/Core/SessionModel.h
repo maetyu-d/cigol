@@ -48,6 +48,10 @@ struct SuperColliderScriptState
     juce::String synthDefName;
     juce::String entryNode;
     juce::String busRouting;
+    juce::String primaryParameterName { "freq" };
+    float primaryParameterValue { 220.0f };
+    juce::String secondaryParameterName { "amp" };
+    float secondaryParameterValue { 0.15f };
     juce::String statusLine;
     juce::String consoleOutput;
     juce::String lastRenderPath;

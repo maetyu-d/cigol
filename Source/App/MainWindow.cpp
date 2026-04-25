@@ -78,7 +78,7 @@ public:
                 menu.addItem(menuSaveProject, "Save\tCmd+S", main != nullptr);
                 menu.addItem(menuSaveProjectAs, "Save As...\tCmd+Shift+S", main != nullptr);
                 menu.addSeparator();
-                menu.addItem(menuImportAudioToSelectedClip, "Import Audio File to Selected Clip...", main != nullptr);
+                menu.addItem(menuImportAudioToSelectedClip, "Import Audio to Selected Clip...", main != nullptr);
                 break;
 
             case 1:
@@ -108,7 +108,7 @@ public:
                 newTrackMenu.addItem(menuAddAudioTrackMono, "New Audio Track (Mono)");
                 newTrackMenu.addItem(menuAddMidiTrack, "New MIDI Track");
                 newTrackMenu.addItem(menuAddInstrumentTrack, "New Instrument Track");
-                newTrackMenu.addItem(menuAddSuperColliderTrack, "New SuperCollider Render Track");
+                newTrackMenu.addItem(menuAddSuperColliderTrack, "New SC Scene Track");
                 newTrackMenu.addItem(menuAddFolderTrack, "New Folder Stack");
                 menu.addSubMenu("New Track", newTrackMenu);
                 menu.addSeparator();

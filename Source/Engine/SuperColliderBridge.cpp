@@ -60,6 +60,32 @@ int extractScErrorLine(const juce::String& output, int wrapperPrefixLines)
 
     return -1;
 }
+
+juce::String sanitiseScIdentifier(const juce::String& name, const juce::String& fallback)
+{
+    juce::String cleaned;
+    for (auto ch : name)
+    {
+        if (juce::CharacterFunctions::isLetterOrDigit(ch) || ch == '_')
+            cleaned += ch;
+    }
+
+    if (cleaned.isEmpty())
+        cleaned = fallback;
+
+    if (! juce::CharacterFunctions::isLetter(cleaned[0]) && cleaned[0] != '_')
+        cleaned = "_" + cleaned;
+
+    return cleaned;
+}
+
+juce::String scParameterPreamble(const SuperColliderScriptState& script)
+{
+    const auto primaryName = sanitiseScIdentifier(script.primaryParameterName, "paramA");
+    const auto secondaryName = sanitiseScIdentifier(script.secondaryParameterName, "paramB");
+    return "var " + primaryName + " = " + juce::String(script.primaryParameterValue, 4) + ";\n"
+        + "        var " + secondaryName + " = " + juce::String(script.secondaryParameterValue, 4) + ";\n";
+}
 } // namespace
 
 SuperColliderProcessBridge::SuperColliderProcessBridge()
@@ -424,10 +450,11 @@ bool SuperColliderProcessBridge::runRenderScriptPreview(SessionState& session, i
     }
 
     juce::String output;
-    constexpr int wrapperPrefixLines = 3;
+    constexpr int wrapperPrefixLines = 5;
     const auto wrappedScript = juce::String()
         + "s.waitForBoot {\n"
         + "    {\n"
+        + scParameterPreamble(*script)
         + "        var cigolPreview = { " + scriptBody + " };\n"
         + "        cigolPreview.play;\n"
         + "        \"CIGOL_SC_RUN_OK\".postln;\n"
@@ -580,11 +607,12 @@ bool SuperColliderProcessBridge::renderScriptToAudio(SessionState& session, int 
                                                            false);
 
     juce::String output;
-    constexpr int wrapperPrefixLines = 3;
+    constexpr int wrapperPrefixLines = 5;
     const auto wrappedScript = juce::String()
         + "s.waitForBoot {\n"
         + "    var cigolPath = \"" + escapeForScString(renderedFile.getFullPathName()) + "\";\n"
         + "    var cigolRenderDur = " + juce::String(renderDurationSeconds, 3) + ";\n"
+        + scParameterPreamble(*script)
         + "    s.freeAll; s.sync;\n"
         + "    s.record(path: cigolPath, numChannels: 2, duration: cigolRenderDur + 0.3);\n"
         + "    x = { " + scriptBody + " }.play;\n"

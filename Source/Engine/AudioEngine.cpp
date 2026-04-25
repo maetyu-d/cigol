@@ -473,7 +473,7 @@ std::vector<AudioEngine::AutomatableParameterChoice> AudioEngine::getAutomatable
         const auto& parameters = slot.instance->getParameters();
         for (int parameterIndex = 0; parameterIndex < static_cast<int>(parameters.size()); ++parameterIndex)
         {
-            if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+            if (auto* parameter = parameters[parameterIndex])
                 choices.push_back({ slot.slotIndex,
                                     parameterIndex,
                                     "Slot " + juce::String(slot.slotIndex + 1) + " / " + parameter->getName(48),
@@ -508,7 +508,7 @@ AudioEngine::PluginParameterBindingStatus AudioEngine::getTrackPluginParameterBi
     if (parameterIndex < 0 || parameterIndex >= static_cast<int>(parameters.size()))
         return status;
 
-    if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+    if (auto* parameter = parameters[parameterIndex])
     {
         status.parameterAvailable = true;
         status.resolvedName = "Slot " + juce::String(slotIndex + 1) + " / " + parameter->getName(48);
@@ -539,7 +539,7 @@ float AudioEngine::getTrackPluginParameterValue(int trackId, int slotIndex, int 
     if (parameterIndex < 0 || parameterIndex >= static_cast<int>(parameters.size()))
         return 0.5f;
 
-    if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+    if (auto* parameter = parameters[parameterIndex])
         return parameter->getValue();
 
     return 0.5f;
@@ -567,7 +567,7 @@ bool AudioEngine::setTrackPluginParameterValue(int trackId, int slotIndex, int p
     if (parameterIndex < 0 || parameterIndex >= static_cast<int>(parameters.size()))
         return false;
 
-    if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+    if (auto* parameter = parameters[parameterIndex])
     {
         parameter->beginChangeGesture();
         parameter->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, normalisedValue));
@@ -1355,7 +1355,7 @@ void AudioEngine::renderAudioRegions(juce::AudioBuffer<float>& buffer)
 
                         const auto& parameters = slot.instance->getParameters();
                         for (int parameterIndex = 0; parameterIndex < static_cast<int>(parameters.size()); ++parameterIndex)
-                            if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+                            if (auto* parameter = parameters[parameterIndex])
                                 parameter->setValueNotifyingHost(pluginAutomationValueForSlot(track.pluginAutomationLanes,
                                                                                               slot.slotIndex,
                                                                                               parameterIndex,
@@ -1594,7 +1594,7 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
                     {
                         const auto& instrumentParameters = hostedInstrument->instance->getParameters();
                         for (int parameterIndex = 0; parameterIndex < static_cast<int>(instrumentParameters.size()); ++parameterIndex)
-                            if (auto* parameter = instrumentParameters[static_cast<size_t>(parameterIndex)])
+                            if (auto* parameter = instrumentParameters[parameterIndex])
                                 parameter->setValueNotifyingHost(pluginAutomationValueForSlot(track.pluginAutomationLanes,
                                                                                               hostedInstrument->slotIndex,
                                                                                               parameterIndex,
@@ -1611,7 +1611,7 @@ void AudioEngine::renderMidiRegions(juce::AudioBuffer<float>& buffer)
 
                             const auto& parameters = slot.instance->getParameters();
                             for (int parameterIndex = 0; parameterIndex < static_cast<int>(parameters.size()); ++parameterIndex)
-                                if (auto* parameter = parameters[static_cast<size_t>(parameterIndex)])
+                                if (auto* parameter = parameters[parameterIndex])
                                     parameter->setValueNotifyingHost(pluginAutomationValueForSlot(track.pluginAutomationLanes,
                                                                                                   slot.slotIndex,
                                                                                                   parameterIndex,

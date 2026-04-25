@@ -99,6 +99,10 @@ var superColliderScriptToVar(const SuperColliderScriptState& script)
     object->setProperty("synthDefName", script.synthDefName);
     object->setProperty("entryNode", script.entryNode);
     object->setProperty("busRouting", script.busRouting);
+    object->setProperty("primaryParameterName", script.primaryParameterName);
+    object->setProperty("primaryParameterValue", script.primaryParameterValue);
+    object->setProperty("secondaryParameterName", script.secondaryParameterName);
+    object->setProperty("secondaryParameterValue", script.secondaryParameterValue);
     object->setProperty("statusLine", script.statusLine);
     object->setProperty("consoleOutput", script.consoleOutput);
     object->setProperty("lastRenderPath", script.lastRenderPath);
@@ -120,6 +124,18 @@ SuperColliderScriptState superColliderScriptFromVar(const var& value)
         script.synthDefName = object->getProperty("synthDefName").toString();
         script.entryNode = object->getProperty("entryNode").toString();
         script.busRouting = object->getProperty("busRouting").toString();
+        script.primaryParameterName = object->hasProperty("primaryParameterName")
+            ? object->getProperty("primaryParameterName").toString()
+            : juce::String("freq");
+        script.primaryParameterValue = object->hasProperty("primaryParameterValue")
+            ? static_cast<float>(static_cast<double>(object->getProperty("primaryParameterValue")))
+            : 220.0f;
+        script.secondaryParameterName = object->hasProperty("secondaryParameterName")
+            ? object->getProperty("secondaryParameterName").toString()
+            : juce::String("amp");
+        script.secondaryParameterValue = object->hasProperty("secondaryParameterValue")
+            ? static_cast<float>(static_cast<double>(object->getProperty("secondaryParameterValue")))
+            : 0.15f;
         script.statusLine = object->getProperty("statusLine").toString();
         script.consoleOutput = object->getProperty("consoleOutput").toString();
         script.lastRenderPath = object->getProperty("lastRenderPath").toString();
@@ -517,12 +533,12 @@ SessionState createDemoSession()
             {},
             -1,
             {
-                { "Verse Lead", Colour::fromRGB(236, 94, 90), RegionKind::audio, 1.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f, {} },
-                { "Hook Double", Colour::fromRGB(255, 133, 92), RegionKind::audio, 11.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {} }
+                { "Verse Lead", Colour::fromRGB(236, 94, 90), RegionKind::audio, 1.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt },
+                { "Hook Double", Colour::fromRGB(255, 133, 92), RegionKind::audio, 11.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt }
             },
             {
                 { ProcessorKind::superColliderFx, "SC Tape Bloom", {}, {}, false, 1.0f, 0.0f,
-                    SuperColliderScriptState { "Tape Bloom", "In.ar(inBus, 2).tanh * 0.8", "tapeBloom", "SynthDef(\\\\tapeBloom)", "Audio Track -> SC FX Bus A", "Live SC insert ready", {}, {}, {}, -1, true, true, false } }
+                    SuperColliderScriptState { "Tape Bloom", "In.ar(inBus, 2).tanh * 0.8", "tapeBloom", "SynthDef(\\\\tapeBloom)", "Audio Track -> SC FX Bus A", "drive", 0.8f, "mix", 1.0f, "Live SC insert ready", {}, {}, {}, -1, true, true, false } }
             },
             {},
             std::nullopt },
@@ -543,15 +559,15 @@ SessionState createDemoSession()
                     makeMidiPhrase({
                         { 36, 0.0, 0.5, 110, false }, { 42, 0.5, 0.5, 92, false }, { 38, 1.0, 0.5, 104, false }, { 42, 1.5, 0.5, 88, false },
                         { 36, 2.0, 0.5, 112, false }, { 42, 2.5, 0.5, 90, false }, { 38, 3.0, 0.5, 102, false }, { 46, 3.5, 0.5, 86, false }
-                    }) },
+                    }), false, 0.0, false, 0.0, std::nullopt },
                 { "Chorus Lift", Colour::fromRGB(255, 207, 99), RegionKind::generated, 9.0, 8.0, {}, 0.0, 0.0, 0.0, 1.0f,
                     makeMidiPhrase({
                         { 48, 0.0, 1.0, 96, false }, { 55, 1.0, 1.0, 96, false }, { 60, 2.0, 1.0, 102, false }, { 67, 3.0, 1.0, 104, false }
-                    }) }
+                    }), false, 0.0, false, 0.0, std::nullopt }
             },
             {},
             { MidiGeneratorKind::superCollider, "SC Euclidean Generator", true, true,
-                SuperColliderScriptState { "Euclid 7/12", "Pbind(\\\\degree, Pseq([0, 2, 4, 7], inf), \\\\dur, 0.25)", "", "Pdef(\\\\euclid)", "SC MIDI Clock -> Pulse Lab", "Generating MIDI into track input", {}, {}, {}, -1, true, true, false } },
+                SuperColliderScriptState { "Euclid 7/12", "Pbind(\\\\degree, Pseq([0, 2, 4, 7], inf), \\\\dur, 0.25)", "", "Pdef(\\\\euclid)", "SC MIDI Clock -> Pulse Lab", "density", 0.25f, "swing", 0.0f, "Generating MIDI into track input", {}, {}, {}, -1, true, true, false } },
             std::nullopt },
 
         { 3, "Chroma Keys", "Instrument Track", TrackKind::instrument, TrackChannelMode::stereo, 0, true, Colour::fromRGB(67, 183, 148), false, false, false, false,
@@ -582,7 +598,7 @@ SessionState createDemoSession()
                         { 60, 0.0, 2.0, 98, false }, { 64, 0.0, 2.0, 92, false }, { 67, 0.0, 2.0, 94, false },
                         { 57, 2.0, 2.0, 96, false }, { 60, 2.0, 2.0, 90, false }, { 64, 2.0, 2.0, 94, false },
                         { 62, 4.0, 2.0, 100, false }, { 65, 4.0, 2.0, 94, false }, { 69, 4.0, 2.0, 96, false }
-                    }) }
+                    }), false, 0.0, false, 0.0, std::nullopt }
             },
             {
                 { ProcessorKind::audioUnit, "Retro Synth", {}, {}, false, 1.0f, 0.0f, std::nullopt }
@@ -590,7 +606,7 @@ SessionState createDemoSession()
             {},
             std::nullopt },
 
-        { 4, "Nebula Scene", "SuperCollider Render", TrackKind::superColliderRender, TrackChannelMode::stereo, 0, true, juce::Colour::fromRGB(84, 155, 255), false, false, false, false,
+        { 4, "Nebula Scene", "SC Scene Track", TrackKind::superColliderRender, TrackChannelMode::stereo, 0, true, juce::Colour::fromRGB(84, 155, 255), false, false, false, false,
             { 0.70f, 0.18f, 0.0f },
             AutomationLaneMode::volume, true, AutomationWriteMode::read, AutomationLaneMode::none, false, false,
             {
@@ -607,9 +623,9 @@ SessionState createDemoSession()
             -1,
             {
                 { "Scene Print", juce::Colour::fromRGB(84, 155, 255), RegionKind::generated, 5.0, 12.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0,
-                  SuperColliderScriptState { "Nebula Scene", "Out.ar(0, GVerb.ar(Mix(SinOsc.ar([110, 220, 330], 0, 0.1))))", "nebulaScene", "SynthDef(\\\\nebulaScene)", "SC Render Bus A -> audio stem", "Ready for offline bounce or live preview", {}, {}, {}, -1, true, true, true } },
+                  SuperColliderScriptState { "Nebula Scene", "Out.ar(0, GVerb.ar(Mix(SinOsc.ar([freq, freq * 2, freq * 3], 0, amp))))", "nebulaScene", "SynthDef(\\\\nebulaScene)", "SC Render Bus A -> audio stem", "freq", 110.0f, "amp", 0.1f, "Ready for offline bounce or live preview", {}, {}, {}, -1, true, true, true } },
                 { "Granular Tail", juce::Colour::fromRGB(125, 188, 255), RegionKind::generated, 18.0, 4.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0,
-                  SuperColliderScriptState { "Granular Tail", "Out.ar(0, CombC.ar(PinkNoise.ar(0.08), 0.8, 0.35, 4.0))", "granularTail", "SynthDef(\\\\tapeBloom)", "SC Render Bus A -> audio stem", "Tail texture for the scene print clip", {}, {}, {}, -1, true, true, true } }
+                  SuperColliderScriptState { "Granular Tail", "Out.ar(0, CombC.ar(PinkNoise.ar(amp), 0.8, 0.35, freq / 100.0))", "granularTail", "SynthDef(\\\\tapeBloom)", "SC Render Bus A -> audio stem", "delay", 400.0f, "amp", 0.08f, "Tail texture for the scene print clip", {}, {}, {}, -1, true, true, true } }
             },
             {},
             {},
@@ -631,12 +647,12 @@ SessionState createDemoSession()
             {},
             -1,
             {
-                { "Reverse Swell", juce::Colour::fromRGB(172, 122, 255), RegionKind::audio, 15.0, 2.0, {}, 0.0, 0.0, 0.0, 1.0f, {} }
+                { "Reverse Swell", juce::Colour::fromRGB(172, 122, 255), RegionKind::audio, 15.0, 2.0, {}, 0.0, 0.0, 0.0, 1.0f, {}, false, 0.0, false, 0.0, std::nullopt }
             },
             {
                 { ProcessorKind::audioUnit, "Channel EQ", {}, {}, false, 1.0f, 0.0f, std::nullopt },
                 { ProcessorKind::superColliderFx, "SC Resonant Freeze", {}, {}, true, 0.72f, -2.0f,
-                    SuperColliderScriptState { "Resonant Freeze", "FFT(LocalBuf(2048), In.ar(inBus, 2))", "freezeFx", "Ndef(\\\\freezeFx)", "FX Print -> SC FX Bus A", "Bypassed SC insert", {}, {}, {}, -1, true, true, false } }
+                    SuperColliderScriptState { "Resonant Freeze", "FFT(LocalBuf(2048), In.ar(inBus, 2))", "freezeFx", "Ndef(\\\\freezeFx)", "FX Print -> SC FX Bus A", "mix", 1.0f, "resonance", 0.6f, "Bypassed SC insert", {}, {}, {}, -1, true, true, false } }
             },
             {},
             std::nullopt }
@@ -960,7 +976,7 @@ juce::String toDisplayString(TrackKind kind)
         case TrackKind::audio: return "Audio";
         case TrackKind::midi: return "MIDI";
         case TrackKind::instrument: return "Instrument";
-        case TrackKind::superColliderRender: return "SuperCollider Render";
+        case TrackKind::superColliderRender: return "SC Scene";
         case TrackKind::folder: return "Folder Stack";
     }
 
