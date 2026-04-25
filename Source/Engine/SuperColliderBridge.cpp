@@ -26,6 +26,40 @@ juce::String describeProcessIssue(const juce::String& output)
 
     return {};
 }
+
+int extractScErrorLine(const juce::String& output, int wrapperPrefixLines)
+{
+    const auto lower = output.toLowerCase();
+
+    auto parseAfterToken = [&] (const juce::String& token) -> int
+    {
+        const auto tokenIndex = lower.indexOf(token);
+        if (tokenIndex < 0)
+            return -1;
+
+        auto index = tokenIndex + token.length();
+        while (index < output.length() && ! juce::CharacterFunctions::isDigit(output[index]))
+            ++index;
+
+        juce::String digits;
+        while (index < output.length() && juce::CharacterFunctions::isDigit(output[index]))
+        {
+            digits += output[index];
+            ++index;
+        }
+
+        if (digits.isEmpty())
+            return -1;
+
+        return juce::jmax(1, digits.getIntValue() - wrapperPrefixLines);
+    };
+
+    for (const auto& token : { juce::String("line "), juce::String(" at line "), juce::String("lineno ") })
+        if (const auto parsed = parseAfterToken(token); parsed > 0)
+            return parsed;
+
+    return -1;
+}
 } // namespace
 
 SuperColliderProcessBridge::SuperColliderProcessBridge()
@@ -247,15 +281,18 @@ juce::String SuperColliderProcessBridge::getConnectionSummary(const SessionState
 
 juce::String SuperColliderProcessBridge::describeTrack(const TrackState& track) const
 {
-    if (track.kind == TrackKind::superColliderRender && track.renderScript.has_value())
+    if (track.kind == TrackKind::superColliderRender)
     {
-        const auto synthDefName = resolveRenderSynthDefName(track);
-        auto description = "SC render track via " + track.renderScript->entryNode + " | synthdef " + synthDefName + " | bus " + juce::String(renderAudioBusForTrack(track));
+        if (const auto* script = findDescriptiveRenderScript(track))
+        {
+            const auto synthDefName = resolveRenderSynthDefName(track, script);
+            auto description = "SC render track via " + script->entryNode + " | synthdef " + synthDefName + " | bus " + juce::String(renderAudioBusForTrack(track));
 
-        if (const auto* descriptor = findSynthDefDescriptor(synthDefName))
-            description += " | " + descriptor->description;
+            if (const auto* descriptor = findSynthDefDescriptor(synthDefName))
+                description += " | " + descriptor->description;
 
-        return description;
+            return description;
+        }
     }
 
     if (track.midiGenerator.kind == MidiGeneratorKind::superCollider && track.midiGenerator.superCollider.has_value())
@@ -312,7 +349,7 @@ std::vector<SuperColliderTrackSnapshot> SuperColliderProcessBridge::createSnapsh
             track.name,
             track.kind,
             describeTrack(track),
-            track.renderScript.has_value(),
+            findDescriptiveRenderScript(track) != nullptr,
             hasFxInsert,
             track.midiGenerator.kind == MidiGeneratorKind::superCollider
         });
@@ -346,6 +383,346 @@ void SuperColliderProcessBridge::updateHostedInsertRouting(const SessionState& s
         oscSender.send("/n_set", fxNodeIdForTrack(*trackIt),
                        juce::String("amp"), juce::jlimit(0.0f, 1.0f, snapshot.outputLevel));
     }
+}
+
+bool SuperColliderProcessBridge::runRenderScriptPreview(SessionState& session, int trackId, juce::String& message)
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track)
+    {
+        return track.id == trackId;
+    });
+
+    auto* script = findEditableRenderScript(session, trackId);
+
+    if (trackIt == session.tracks.end() || trackIt->kind != TrackKind::superColliderRender || script == nullptr)
+    {
+        message = "No SuperCollider render script is available for this clip.";
+        return false;
+    }
+
+    if (! ensureServerRunning(session))
+    {
+        message = runtimeState.statusLine.isNotEmpty() ? runtimeState.statusLine : "SuperCollider server is unavailable.";
+        script->statusLine = message;
+        script->consoleOutput = message;
+        script->errorLine = -1;
+        script->lastRunSucceeded = false;
+        syncSession(session);
+        return false;
+    }
+
+    const auto scriptBody = script->code.trim();
+    if (scriptBody.isEmpty())
+    {
+        message = "The SuperCollider script is empty.";
+        script->statusLine = message;
+        script->consoleOutput = message;
+        script->errorLine = -1;
+        script->lastRunSucceeded = false;
+        syncSession(session);
+        return false;
+    }
+
+    juce::String output;
+    constexpr int wrapperPrefixLines = 3;
+    const auto wrappedScript = juce::String()
+        + "s.waitForBoot {\n"
+        + "    {\n"
+        + "        var cigolPreview = { " + scriptBody + " };\n"
+        + "        cigolPreview.play;\n"
+        + "        \"CIGOL_SC_RUN_OK\".postln;\n"
+        + "    }.value;\n"
+        + "    0.2.wait;\n"
+        + "    0.exit;\n"
+        + "};\n";
+
+    const auto ok = runSclangScript(wrappedScript, 6000, output) && output.contains("CIGOL_SC_RUN_OK");
+    if (ok)
+    {
+        message = "Ran SuperCollider script preview.";
+    }
+    else
+    {
+        message = describeProcessIssue(output);
+        if (message.isEmpty())
+            message = "Could not run the SuperCollider script.";
+    }
+    script->statusLine = message;
+    script->consoleOutput = output.trim().isNotEmpty() ? output.trim() : message;
+    script->errorLine = ok ? -1 : extractScErrorLine(output, wrapperPrefixLines);
+    script->lastRunSucceeded = ok;
+    runtimeState.lastOscAction = ok ? "Ran render script preview for " + trackIt->name : runtimeState.lastOscAction;
+    runtimeState.diagnostics = ok ? output.trim() : message;
+    syncSession(session);
+    return ok;
+}
+
+bool SuperColliderProcessBridge::stopRenderScriptPreview(SessionState& session, int trackId, juce::String& message)
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track)
+    {
+        return track.id == trackId;
+    });
+
+    auto* script = findEditableRenderScript(session, trackId);
+
+    if (trackIt == session.tracks.end() || trackIt->kind != TrackKind::superColliderRender || script == nullptr)
+    {
+        message = "No SuperCollider render script is available for this clip.";
+        return false;
+    }
+
+    if (! runtimeState.oscConnected)
+    {
+        message = "SuperCollider preview is not currently running.";
+        script->statusLine = message;
+        script->consoleOutput = message;
+        script->errorLine = -1;
+        script->lastRunSucceeded = false;
+        syncSession(session);
+        return false;
+    }
+
+    freeRenderNode(trackId);
+    oscSender.send("/g_freeAll", groupIdForTrack(*trackIt));
+    message = "Stopped SuperCollider render playback for this track.";
+    script->statusLine = message;
+    script->consoleOutput = message;
+    script->errorLine = -1;
+    script->lastRunSucceeded = true;
+    runtimeState.lastOscAction = "Stopped render script preview for " + trackIt->name;
+    syncSession(session);
+    return true;
+}
+
+bool SuperColliderProcessBridge::applyRenderScript(SessionState& session, int trackId, juce::String& message)
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track)
+    {
+        return track.id == trackId;
+    });
+
+    auto* script = findEditableRenderScript(session, trackId);
+
+    if (trackIt == session.tracks.end() || trackIt->kind != TrackKind::superColliderRender || script == nullptr)
+    {
+        message = "No SuperCollider render script is available for this clip.";
+        return false;
+    }
+
+    refreshEnvironment(session);
+
+    script->statusLine = "Applied to " + trackIt->name;
+    script->consoleOutput = runtimeState.statusLine.isNotEmpty()
+        ? runtimeState.statusLine + "\n" + runtimeState.lastOscAction
+        : runtimeState.lastOscAction;
+    script->errorLine = -1;
+    script->lastRunSucceeded = true;
+    runtimeState.lastOscAction = "Applied render script for " + trackIt->name;
+
+    if (runtimeState.oscConnected && session.transport.playing && script->enabled)
+        updateRenderNode(*trackIt, *script);
+
+    message = script->statusLine;
+    syncSession(session);
+    return true;
+}
+
+bool SuperColliderProcessBridge::renderScriptToAudio(SessionState& session, int trackId, double renderLengthBeats, juce::File& renderedFile, juce::String& message)
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track)
+    {
+        return track.id == trackId;
+    });
+
+    auto* region = findEditableRenderRegion(session, trackId);
+    auto* script = findEditableRenderScript(session, trackId);
+
+    if (trackIt == session.tracks.end() || trackIt->kind != TrackKind::superColliderRender || region == nullptr || script == nullptr)
+    {
+        message = "No SuperCollider render script is available for this clip.";
+        return false;
+    }
+
+    if (! ensureServerRunning(session))
+    {
+        message = runtimeState.statusLine.isNotEmpty() ? runtimeState.statusLine : "SuperCollider server is unavailable.";
+        script->statusLine = message;
+        script->consoleOutput = message;
+        script->errorLine = -1;
+        script->lastRunSucceeded = false;
+        syncSession(session);
+        return false;
+    }
+
+    const auto scriptBody = script->code.trim();
+    if (scriptBody.isEmpty())
+    {
+        message = "The SuperCollider script is empty.";
+        script->statusLine = message;
+        script->consoleOutput = message;
+        script->errorLine = -1;
+        script->lastRunSucceeded = false;
+        syncSession(session);
+        return false;
+    }
+
+    const auto clampedRenderLengthBeats = juce::jmax(0.25, renderLengthBeats);
+    const auto renderDurationSeconds = juce::jmax(0.25,
+                                                  projectSecondsForBeat(session, region->startBeat + clampedRenderLengthBeats)
+                                                      - projectSecondsForBeat(session, region->startBeat));
+
+    auto renderDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                               .getChildFile("cigoL-renders");
+    renderDirectory.createDirectory();
+    renderedFile = renderDirectory.getNonexistentChildFile(juce::File::createLegalFileName(trackIt->name + " " + region->name + " Render"),
+                                                           ".wav",
+                                                           false);
+
+    juce::String output;
+    constexpr int wrapperPrefixLines = 3;
+    const auto wrappedScript = juce::String()
+        + "s.waitForBoot {\n"
+        + "    var cigolPath = \"" + escapeForScString(renderedFile.getFullPathName()) + "\";\n"
+        + "    var cigolRenderDur = " + juce::String(renderDurationSeconds, 3) + ";\n"
+        + "    s.freeAll; s.sync;\n"
+        + "    s.record(path: cigolPath, numChannels: 2, duration: cigolRenderDur + 0.3);\n"
+        + "    x = { " + scriptBody + " }.play;\n"
+        + "    cigolRenderDur.wait;\n"
+        + "    x.free; 0.2.wait;\n"
+        + "    s.stopRecording;\n"
+        + "    \"" + juce::String("CIGOL_SC_RENDER_OK") + "\".postln;\n"
+        + "    0.2.wait;\n"
+        + "    0.exit;\n"
+        + "};\n";
+
+    const auto ok = runSclangScript(wrappedScript, static_cast<int>((renderDurationSeconds + 4.0) * 1000.0), output)
+        && output.contains("CIGOL_SC_RENDER_OK")
+        && renderedFile.existsAsFile()
+        && renderedFile.getSize() > 0;
+
+    if (ok)
+    {
+        message = "Rendered clip to audio.";
+        script->statusLine = message;
+        script->consoleOutput = output.trim().isNotEmpty() ? output.trim() : renderedFile.getFullPathName();
+        script->errorLine = -1;
+        script->lastRunSucceeded = true;
+        script->rendersOfflineStem = true;
+        runtimeState.lastOscAction = "Rendered audio for " + trackIt->name + " / " + region->name;
+        runtimeState.diagnostics = renderedFile.getFullPathName();
+    }
+    else
+    {
+        if (renderedFile.existsAsFile())
+            renderedFile.deleteFile();
+
+        message = describeProcessIssue(output);
+        if (message.isEmpty())
+            message = "Could not render the SuperCollider clip to audio.";
+        script->statusLine = message;
+        script->consoleOutput = output.trim().isNotEmpty() ? output.trim() : message;
+        script->errorLine = extractScErrorLine(output, wrapperPrefixLines);
+        script->lastRunSucceeded = false;
+    }
+
+    syncSession(session);
+    return ok;
+}
+
+Region* SuperColliderProcessBridge::findEditableRenderRegion(SessionState& session, int trackId) const
+{
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track)
+    {
+        return track.id == trackId;
+    });
+
+    if (trackIt == session.tracks.end() || trackIt->kind != TrackKind::superColliderRender)
+        return nullptr;
+
+    if (session.selectedRegionTrackId == trackId && session.selectedRegionIndex >= 0
+        && session.selectedRegionIndex < static_cast<int>(trackIt->regions.size()))
+    {
+        auto& region = trackIt->regions[static_cast<size_t>(session.selectedRegionIndex)];
+        if (region.kind == RegionKind::generated && region.superColliderScript.has_value())
+            return &region;
+    }
+
+    auto regionIt = std::find_if(trackIt->regions.begin(), trackIt->regions.end(), [] (const auto& region)
+    {
+        return region.kind == RegionKind::generated && region.superColliderScript.has_value();
+    });
+
+    return regionIt != trackIt->regions.end() ? &*regionIt : nullptr;
+}
+
+const Region* SuperColliderProcessBridge::findEditableRenderRegion(const SessionState& session, int trackId) const
+{
+    return const_cast<SuperColliderProcessBridge*> (this)->findEditableRenderRegion(const_cast<SessionState&> (session), trackId);
+}
+
+const Region* SuperColliderProcessBridge::findActiveRenderRegion(const SessionState& session, const TrackState& track) const
+{
+    if (track.kind != TrackKind::superColliderRender)
+        return nullptr;
+
+    const auto playheadBeat = session.transport.playheadBeat;
+    const Region* bestRegion = nullptr;
+
+    for (const auto& region : track.regions)
+    {
+        if (region.kind != RegionKind::generated || ! region.superColliderScript.has_value())
+            continue;
+
+        const auto startBeat = region.startBeat;
+        const auto endBeat = region.startBeat + region.lengthInBeats;
+        if (playheadBeat >= startBeat && playheadBeat < endBeat)
+        {
+            if (bestRegion == nullptr || region.startBeat > bestRegion->startBeat)
+                bestRegion = &region;
+        }
+    }
+
+    return bestRegion;
+}
+
+SuperColliderScriptState* SuperColliderProcessBridge::findEditableRenderScript(SessionState& session, int trackId) const
+{
+    if (auto* region = findEditableRenderRegion(session, trackId))
+        return region->superColliderScript ? &*region->superColliderScript : nullptr;
+
+    auto trackIt = std::find_if(session.tracks.begin(), session.tracks.end(), [trackId] (const auto& track)
+    {
+        return track.id == trackId;
+    });
+
+    return trackIt != session.tracks.end() && trackIt->renderScript.has_value() ? &*trackIt->renderScript : nullptr;
+}
+
+const SuperColliderScriptState* SuperColliderProcessBridge::findEditableRenderScript(const SessionState& session, int trackId) const
+{
+    return const_cast<SuperColliderProcessBridge*> (this)->findEditableRenderScript(const_cast<SessionState&> (session), trackId);
+}
+
+const SuperColliderScriptState* SuperColliderProcessBridge::findActiveRenderScript(const SessionState& session, const TrackState& track) const
+{
+    if (const auto* region = findActiveRenderRegion(session, track))
+        return region->superColliderScript ? &*region->superColliderScript : nullptr;
+
+    return track.renderScript ? &*track.renderScript : nullptr;
+}
+
+const SuperColliderScriptState* SuperColliderProcessBridge::findDescriptiveRenderScript(const TrackState& track) const
+{
+    auto regionIt = std::find_if(track.regions.begin(), track.regions.end(), [] (const auto& region)
+    {
+        return region.kind == RegionKind::generated && region.superColliderScript.has_value();
+    });
+
+    if (regionIt != track.regions.end())
+        return &*regionIt->superColliderScript;
+
+    return track.renderScript ? &*track.renderScript : nullptr;
 }
 
 void SuperColliderProcessBridge::discoverInstallation()
@@ -637,13 +1014,28 @@ void SuperColliderProcessBridge::syncTransportState(const SessionState& session)
 
     for (const auto& track : session.tracks)
     {
-        if (track.kind != TrackKind::superColliderRender || ! track.renderScript.has_value() || ! track.renderScript->enabled)
+        if (track.kind != TrackKind::superColliderRender)
             continue;
 
+        const auto* activeScript = findActiveRenderScript(session, track);
+
+        if (activeScript == nullptr || ! activeScript->enabled)
+        {
+            freeRenderNode(track.id);
+            continue;
+        }
+
+        const auto desiredSynthDef = resolveRenderSynthDefName(track, activeScript);
+        if (const auto currentSynthDef = activeRenderSynthDefs.find(track.id);
+            currentSynthDef != activeRenderSynthDefs.end() && currentSynthDef->second != desiredSynthDef)
+        {
+            freeRenderNode(track.id);
+        }
+
         if (! activeRenderNodes.contains(track.id))
-            createRenderNode(track);
+            createRenderNode(track, *activeScript);
         else
-            updateRenderNode(track);
+            updateRenderNode(track, *activeScript);
     }
 
     syncFxState(session);
@@ -654,14 +1046,15 @@ void SuperColliderProcessBridge::syncTransportState(const SessionState& session)
     lastTransportPlaying = transportPlaying;
 }
 
-void SuperColliderProcessBridge::createRenderNode(const TrackState& track)
+void SuperColliderProcessBridge::createRenderNode(const TrackState& track, const SuperColliderScriptState& script)
 {
     if (! runtimeState.oscConnected)
         return;
 
     const auto nodeId = synthNodeIdForTrack(track);
     activeRenderNodes[track.id] = nodeId;
-    const auto synthDefName = resolveRenderSynthDefName(track);
+    const auto synthDefName = resolveRenderSynthDefName(track, &script);
+    activeRenderSynthDefs[track.id] = synthDefName;
 
     oscSender.send("/s_new", synthDefName, nodeId, 0, groupIdForTrack(track),
                    juce::String("freq"), frequencyForRenderTrack(track),
@@ -672,7 +1065,7 @@ void SuperColliderProcessBridge::createRenderNode(const TrackState& track)
     runtimeState.lastOscAction = "Created render node for " + track.name + " using " + synthDefName;
 }
 
-void SuperColliderProcessBridge::updateRenderNode(const TrackState& track)
+void SuperColliderProcessBridge::updateRenderNode(const TrackState& track, const SuperColliderScriptState& script)
 {
     if (! runtimeState.oscConnected)
         return;
@@ -682,12 +1075,13 @@ void SuperColliderProcessBridge::updateRenderNode(const TrackState& track)
     if (it == activeRenderNodes.end())
         return;
 
+    const auto synthDefName = resolveRenderSynthDefName(track, &script);
     oscSender.send("/n_set", it->second,
                    juce::String("freq"), frequencyForRenderTrack(track),
                    juce::String("amp"), (track.muted ? 0.0f : track.mixer.volume * 0.15f));
     oscSender.send("/c_set", renderAudioBusForTrack(track), (track.muted ? 0.0f : track.mixer.volume));
 
-    runtimeState.lastOscAction = "Updated render node for " + track.name;
+    runtimeState.lastOscAction = "Updated render node for " + track.name + " using " + synthDefName;
 }
 
 void SuperColliderProcessBridge::syncFxState(const SessionState& session)
@@ -861,6 +1255,7 @@ void SuperColliderProcessBridge::freeRenderNode(int trackId)
         oscSender.send("/n_free", it->second);
 
     activeRenderNodes.erase(it);
+    activeRenderSynthDefs.erase(trackId);
     runtimeState.activeRenderNodeCount = static_cast<int>(activeRenderNodes.size());
 }
 
@@ -871,6 +1266,7 @@ void SuperColliderProcessBridge::freeAllRenderNodes()
             juce::ignoreUnused(trackId), oscSender.send("/n_free", nodeId);
 
     activeRenderNodes.clear();
+    activeRenderSynthDefs.clear();
     runtimeState.activeRenderNodeCount = 0;
 }
 
@@ -968,10 +1364,12 @@ bool SuperColliderProcessBridge::runSclangScript(const juce::String& scriptBody,
     return process.getExitCode() == 0;
 }
 
-juce::String SuperColliderProcessBridge::resolveRenderSynthDefName(const TrackState& track) const
+juce::String SuperColliderProcessBridge::resolveRenderSynthDefName(const TrackState& track, const SuperColliderScriptState* script) const
 {
-    if (track.renderScript.has_value() && track.renderScript->synthDefName.isNotEmpty() && isSynthDefAvailable(track.renderScript->synthDefName))
-        return track.renderScript->synthDefName;
+    juce::ignoreUnused(track);
+
+    if (script != nullptr && script->synthDefName.isNotEmpty() && isSynthDefAvailable(script->synthDefName))
+        return script->synthDefName;
 
     return "default";
 }

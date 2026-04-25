@@ -19,6 +19,13 @@ enum MenuItemIds
     menuCopy,
     menuPaste,
     menuDelete,
+    menuSplitAtPlayhead,
+    menuSplitAtLocators,
+    menuGlueRegions,
+    menuSelectAllInCycle,
+    menuSelectOverlapping,
+    menuRepeatRegionByCycle,
+    menuRepeatRegionByCount,
     menuAddAudioTrackStereo,
     menuAddAudioTrackMono,
     menuAddMidiTrack,
@@ -82,6 +89,16 @@ public:
                 menu.addItem(menuCopy, "Copy\tCmd+C", main != nullptr && main->canCopyAction());
                 menu.addItem(menuPaste, "Paste\tCmd+V", main != nullptr && main->canPasteAction());
                 menu.addItem(menuDelete, "Delete\tDelete", main != nullptr && main->canDeleteAction());
+                menu.addSeparator();
+                menu.addItem(menuSplitAtPlayhead, "Split at Playhead\tCmd+\\", main != nullptr);
+                menu.addItem(menuSplitAtLocators, "Split at Locators\tCmd+Shift+\\", main != nullptr);
+                menu.addItem(menuGlueRegions, "Glue Regions\tCmd+J", main != nullptr);
+                menu.addSeparator();
+                menu.addItem(menuSelectAllInCycle, "Select All in Cycle\tCmd+Shift+A", main != nullptr);
+                menu.addItem(menuSelectOverlapping, "Select Overlapping\tCmd+Option+A", main != nullptr);
+                menu.addSeparator();
+                menu.addItem(menuRepeatRegionByCycle, "Repeat Region by Cycle\tCmd+Option+R", main != nullptr);
+                menu.addItem(menuRepeatRegionByCount, "Repeat Region by Count...\tCmd+Shift+Option+R", main != nullptr);
                 break;
 
             case 2:
@@ -162,6 +179,13 @@ public:
             case menuCopy: main->menuCopy(); break;
             case menuPaste: main->menuPaste(); break;
             case menuDelete: main->menuDelete(); break;
+            case menuSplitAtPlayhead: main->menuSplitAtPlayhead(); break;
+            case menuSplitAtLocators: main->menuSplitAtLocators(); break;
+            case menuGlueRegions: main->menuGlueRegions(); break;
+            case menuSelectAllInCycle: main->menuSelectAllInCycle(); break;
+            case menuSelectOverlapping: main->menuSelectOverlapping(); break;
+            case menuRepeatRegionByCycle: main->menuRepeatRegionByCycle(); break;
+            case menuRepeatRegionByCount: main->menuRepeatRegionByCount(); break;
             case menuAddAudioTrackStereo: main->menuAddAudioTrack(false); break;
             case menuAddAudioTrackMono: main->menuAddAudioTrack(true); break;
             case menuAddMidiTrack: main->menuAddMidiTrack(); break;

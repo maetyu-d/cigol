@@ -41,6 +41,23 @@ enum class MidiGeneratorKind
     superCollider
 };
 
+struct SuperColliderScriptState
+{
+    juce::String scriptName;
+    juce::String code;
+    juce::String synthDefName;
+    juce::String entryNode;
+    juce::String busRouting;
+    juce::String statusLine;
+    juce::String consoleOutput;
+    juce::String lastRenderPath;
+    juce::String lastRenderMode;
+    int errorLine { -1 };
+    bool lastRunSucceeded { true };
+    bool enabled { true };
+    bool rendersOfflineStem { false };
+};
+
 struct Region
 {
     struct MidiNote
@@ -67,6 +84,7 @@ struct Region
     double sourceDurationSeconds { 0.0 };
     bool loopEnabled { false };
     double loopLengthInBeats { 0.0 };
+    std::optional<SuperColliderScriptState> superColliderScript;
 };
 
 struct MixerState
@@ -128,18 +146,6 @@ enum class NudgeMode
     beat,
     division,
     tick
-};
-
-struct SuperColliderScriptState
-{
-    juce::String scriptName;
-    juce::String code;
-    juce::String synthDefName;
-    juce::String entryNode;
-    juce::String busRouting;
-    juce::String statusLine;
-    bool enabled { true };
-    bool rendersOfflineStem { false };
 };
 
 struct TrackProcessorState

@@ -90,6 +90,10 @@ public:
     virtual std::vector<SuperColliderTrackSnapshot> createSnapshots(const SessionState& session) const = 0;
     virtual void updateHostedInsertRouting(const SessionState& session,
                                            const std::vector<HostedInsertRoutingSnapshot>& snapshots) = 0;
+    virtual bool runRenderScriptPreview(SessionState& session, int trackId, juce::String& message) = 0;
+    virtual bool stopRenderScriptPreview(SessionState& session, int trackId, juce::String& message) = 0;
+    virtual bool applyRenderScript(SessionState& session, int trackId, juce::String& message) = 0;
+    virtual bool renderScriptToAudio(SessionState& session, int trackId, double renderLengthBeats, juce::File& renderedFile, juce::String& message) = 0;
 };
 
 class SuperColliderProcessBridge final : public SuperColliderBridge
@@ -111,6 +115,10 @@ public:
     std::vector<SuperColliderTrackSnapshot> createSnapshots(const SessionState& session) const override;
     void updateHostedInsertRouting(const SessionState& session,
                                    const std::vector<HostedInsertRoutingSnapshot>& snapshots) override;
+    bool runRenderScriptPreview(SessionState& session, int trackId, juce::String& message) override;
+    bool stopRenderScriptPreview(SessionState& session, int trackId, juce::String& message) override;
+    bool applyRenderScript(SessionState& session, int trackId, juce::String& message) override;
+    bool renderScriptToAudio(SessionState& session, int trackId, double renderLengthBeats, juce::File& renderedFile, juce::String& message) override;
 
 private:
     bool connectOsc();
@@ -121,8 +129,15 @@ private:
     void allocateTrackBuses(const SessionState& session);
     void syncTransportState(const SessionState& session);
     void syncGlobalTransportControls(const SessionState& session);
-    void createRenderNode(const TrackState& track);
-    void updateRenderNode(const TrackState& track);
+    Region* findEditableRenderRegion(SessionState& session, int trackId) const;
+    const Region* findEditableRenderRegion(const SessionState& session, int trackId) const;
+    const Region* findActiveRenderRegion(const SessionState& session, const TrackState& track) const;
+    SuperColliderScriptState* findEditableRenderScript(SessionState& session, int trackId) const;
+    const SuperColliderScriptState* findEditableRenderScript(const SessionState& session, int trackId) const;
+    const SuperColliderScriptState* findActiveRenderScript(const SessionState& session, const TrackState& track) const;
+    const SuperColliderScriptState* findDescriptiveRenderScript(const TrackState& track) const;
+    void createRenderNode(const TrackState& track, const SuperColliderScriptState& script);
+    void updateRenderNode(const TrackState& track, const SuperColliderScriptState& script);
     void syncFxState(const SessionState& session);
     void createFxNode(const TrackState& track, const TrackProcessorState& insert);
     void updateFxNode(const TrackState& track, const TrackProcessorState& insert);
@@ -143,7 +158,7 @@ private:
     juce::File locateSynthDefDirectory() const;
     juce::String escapeForScString(const juce::String& text) const;
     bool runSclangScript(const juce::String& scriptBody, int timeoutMs, juce::String& output) const;
-    juce::String resolveRenderSynthDefName(const TrackState& track) const;
+    juce::String resolveRenderSynthDefName(const TrackState& track, const SuperColliderScriptState* script) const;
     juce::String resolveFxSynthDefName(const TrackState& track, const TrackProcessorState& insert) const;
     bool isSynthDefAvailable(const juce::String& synthDefName) const;
     const SynthDefDescriptor* findSynthDefDescriptor(const juce::String& synthDefName) const;
@@ -159,6 +174,7 @@ private:
     std::unique_ptr<juce::ChildProcess> scsynthProcess;
     juce::OSCSender oscSender;
     std::map<int, int> activeRenderNodes;
+    std::map<int, juce::String> activeRenderSynthDefs;
     std::map<int, int> activeFxNodes;
     std::map<int, HostedInsertRoutingSnapshot> hostedInsertRouting;
     std::map<int, bool> activeMidiGeneratorTracks;

@@ -13,6 +13,13 @@ class MainComponent final : public juce::Component,
                             private juce::Timer
 {
 public:
+    enum class SuperColliderRenderMode
+    {
+        newTrack,
+        replacePrintTrack,
+        cycleToNewTrack
+    };
+
     MainComponent();
     ~MainComponent() override;
 
@@ -31,6 +38,13 @@ public:
     void menuCopy();
     void menuPaste();
     void menuDelete();
+    void menuSplitAtPlayhead();
+    void menuSplitAtLocators();
+    void menuGlueRegions();
+    void menuSelectAllInCycle();
+    void menuSelectOverlapping();
+    void menuRepeatRegionByCycle();
+    void menuRepeatRegionByCount();
     void menuAddAudioTrack(bool mono, int count = 1);
     void menuAddMidiTrack(int count = 1);
     void menuAddInstrumentTrack(int count = 1);
@@ -103,7 +117,18 @@ private:
     void cutSelectedRegion();
     void pasteCopiedRegion();
     void duplicateSelectedRegion();
+    void createNewSuperColliderClip();
+    void renderSelectedSuperColliderClipToAudio(SuperColliderRenderMode mode);
     void toggleSelectedRegionLooping();
+    bool splitTargetRegionsAtBeat(double beat);
+    bool splitTargetRegionsAtLocators();
+    bool glueTargetRegions();
+    bool repeatSelectedRegionByCycle();
+    bool repeatSelectedRegionByCount(int repeatCount);
+    double currentNudgeAmountInBeats() const;
+    bool nudgeSelectedRegion(double beatDelta);
+    bool nudgeSelectedMidiNotes(double beatDelta);
+    void selectRegionsInBeatRange(double startBeat, double endBeat, bool overlappingOnly);
     void assignAudioFileToSelectedRegion();
     void clearAudioFileFromSelectedRegion();
     void loadAudioUnitIntoSelectedTrack(int slotIndex);
@@ -123,6 +148,7 @@ private:
     class MixerComponent;
     class PianoRollComponent;
     class AudioClipEditorComponent;
+    class SuperColliderCodeEditorComponent;
     class LowerPaneSplitterComponent;
     class RightSidebarSplitterComponent;
     class SuperColliderOverviewComponent;
@@ -134,6 +160,7 @@ private:
     std::unique_ptr<MixerComponent> mixer;
     std::unique_ptr<PianoRollComponent> pianoRoll;
     std::unique_ptr<AudioClipEditorComponent> audioClipEditor;
+    std::unique_ptr<SuperColliderCodeEditorComponent> superColliderCodeEditor;
     std::unique_ptr<LowerPaneSplitterComponent> lowerPaneSplitter;
     std::unique_ptr<RightSidebarSplitterComponent> rightSidebarSplitter;
     std::unique_ptr<SuperColliderOverviewComponent> superColliderOverview;
