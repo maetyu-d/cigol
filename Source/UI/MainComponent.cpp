@@ -702,19 +702,24 @@ public:
         mixerButton.setTooltip("Show the mixer pane");
 
         configureTransportButton(backButton, "|<", [this] { state.playheadBeat = std::max(1.0, state.playheadBeat - 4.0); });
-        configureButton(playButton, "Play", [this] { state.playing = ! state.playing; refreshButtonStates(); });
-        configureButton(stopButton, "Stop", [this] {
+        configurePrimaryTransportButton(playButton, "Play", Colour::fromRGB(48, 80, 64), Colour::fromRGB(68, 160, 116), [this]
+        {
+            state.playing = ! state.playing;
+            refreshButtonStates();
+        });
+        configureTransportButton(stopButton, "Stop", [this] {
             state.playing = false;
             state.recording = false;
             state.playheadBeat = 1.0;
             refreshButtonStates();
         });
-        configureButton(recordButton, "Rec", [this] {
+        configurePrimaryTransportButton(recordButton, "Rec", Colour::fromRGB(82, 52, 58), Colour::fromRGB(214, 90, 96), [this]
+        {
             state.recording = ! state.recording;
             state.playing = state.playing || state.recording;
             refreshButtonStates();
         });
-        configureTransportButton(cycleButton, "Cycle", [this]
+        configurePrimaryTransportButton(cycleButton, "Cycle", Colour::fromRGB(88, 78, 46), Colour::fromRGB(222, 171, 73), [this]
         {
             state.cycleEnabled = ! state.cycleEnabled;
             refreshButtonStates();
@@ -739,6 +744,9 @@ public:
         configureDisplayValue(positionValueLabel);
         configureDisplayValue(signatureValueLabel);
         configureDisplayValue(keyValueLabel);
+        positionValueLabel.setFont(FontOptions(16.0f, Font::bold));
+        signatureValueLabel.setFont(FontOptions(15.0f, Font::bold));
+        keyValueLabel.setFont(FontOptions(15.0f, Font::bold));
         addAndMakeVisible(positionPanel);
         addAndMakeVisible(tempoPanel);
         addAndMakeVisible(cycleLeftPanel);
@@ -817,27 +825,27 @@ public:
 
     void paint(Graphics& g) override
     {
-        auto drawPanel = [&g] (const juce::Component& panel)
+        auto drawPanel = [&g] (const juce::Component& panel, Colour fillColour, Colour outlineColour)
         {
-            g.setColour(Colour::fromRGB(30, 35, 44));
+            g.setColour(fillColour);
             g.fillRoundedRectangle(panel.getBounds().toFloat(), 8.0f);
-            g.setColour(Colours::white.withAlpha(0.08f));
+            g.setColour(outlineColour);
             g.drawRoundedRectangle(panel.getBounds().toFloat().reduced(0.5f), 8.0f, 1.0f);
         };
 
-        drawPanel(positionPanel);
-        drawPanel(tempoPanel);
-        drawPanel(cycleLeftPanel);
-        drawPanel(cycleRightPanel);
-        drawPanel(signaturePanel);
-        drawPanel(keyPanel);
+        drawPanel(positionPanel, Colour::fromRGB(28, 35, 48), Colour::fromRGB(74, 102, 134).withAlpha(0.28f));
+        drawPanel(tempoPanel, Colour::fromRGB(34, 40, 50), Colour::fromRGB(168, 126, 68).withAlpha(0.32f));
+        drawPanel(cycleLeftPanel, Colour::fromRGB(31, 37, 47), Colour::fromRGB(112, 123, 148).withAlpha(0.24f));
+        drawPanel(cycleRightPanel, Colour::fromRGB(31, 37, 47), Colour::fromRGB(112, 123, 148).withAlpha(0.24f));
+        drawPanel(signaturePanel, Colour::fromRGB(30, 35, 44), Colours::white.withAlpha(0.07f));
+        drawPanel(keyPanel, Colour::fromRGB(30, 35, 44), Colours::white.withAlpha(0.07f));
     }
 
     void resized() override
     {
         auto area = getLocalBounds().reduced(16, 10);
 
-        auto left = area.removeFromLeft(340);
+        auto left = area.removeFromLeft(392);
         auto viewButtons = left.removeFromTop(28);
         addTrackButton.setBounds(viewButtons.removeFromLeft(42).reduced(3, 1));
         viewButtons.removeFromLeft(4);
@@ -851,7 +859,7 @@ public:
         viewButtons.removeFromLeft(4);
         mixerButton.setBounds(viewButtons.removeFromLeft(60).reduced(3, 1));
 
-        auto center = area.removeFromLeft(520);
+        auto center = area.removeFromLeft(500);
         auto transportRow = center.removeFromTop(28);
         backButton.setBounds(transportRow.removeFromLeft(44).reduced(3, 1));
         transportRow.removeFromLeft(4);
@@ -868,19 +876,26 @@ public:
         countInButton.setBounds(transportRow.removeFromLeft(52).reduced(3, 1));
         auto lcdArea = area;
         const auto spacing = 6;
-        const auto panelWidth = juce::jmax(82, (lcdArea.getWidth() - (spacing * 5)) / 6);
+        const auto totalPanelWidth = juce::jmax(0, lcdArea.getWidth() - (spacing * 5));
+        const auto totalPanelWidthFloat = static_cast<float>(totalPanelWidth);
+        const auto positionWidth = juce::jmax(124, juce::roundToInt(totalPanelWidthFloat * 0.22f));
+        const auto tempoWidth = juce::jmax(116, juce::roundToInt(totalPanelWidthFloat * 0.17f));
+        const auto cycleLeftWidth = juce::jmax(96, juce::roundToInt(totalPanelWidthFloat * 0.13f));
+        const auto cycleRightWidth = juce::jmax(96, juce::roundToInt(totalPanelWidthFloat * 0.13f));
+        const auto signatureWidth = juce::jmax(104, juce::roundToInt(totalPanelWidthFloat * 0.16f));
+        const auto keyWidth = juce::jmax(108, totalPanelWidth - positionWidth - tempoWidth - cycleLeftWidth - cycleRightWidth - signatureWidth);
         auto layoutPanel = [] (juce::Component& panel, juce::Label& title, juce::Rectangle<int> bounds)
         {
             panel.setBounds(bounds);
             auto inner = bounds.reduced(8, 5);
             title.setBounds(inner.removeFromTop(11));
         };
-        layoutPanel(positionPanel, positionTitleLabel, lcdArea.removeFromLeft(panelWidth));
+        layoutPanel(positionPanel, positionTitleLabel, lcdArea.removeFromLeft(positionWidth));
         auto positionInner = positionPanel.getBounds().reduced(8, 5);
         positionInner.removeFromTop(13);
         positionValueLabel.setBounds(positionInner);
         lcdArea.removeFromLeft(spacing);
-        layoutPanel(tempoPanel, tempoTitleLabel, lcdArea.removeFromLeft(panelWidth));
+        layoutPanel(tempoPanel, tempoTitleLabel, lcdArea.removeFromLeft(tempoWidth));
         auto tempoInner = tempoPanel.getBounds().reduced(8, 5);
         tempoInner.removeFromTop(13);
         auto tempoButtonArea = tempoInner.removeFromRight(54);
@@ -888,24 +903,24 @@ public:
         tempoMinusButton.setBounds(tempoButtonArea.removeFromRight(24).reduced(1));
         tempoValueEditor.setBounds(tempoInner);
         lcdArea.removeFromLeft(spacing);
-        layoutPanel(cycleLeftPanel, cycleLeftTitleLabel, lcdArea.removeFromLeft(panelWidth));
+        layoutPanel(cycleLeftPanel, cycleLeftTitleLabel, lcdArea.removeFromLeft(cycleLeftWidth));
         auto cycleLeftInner = cycleLeftPanel.getBounds().reduced(8, 5);
         cycleLeftInner.removeFromTop(13);
         cycleLeftSetButton.setBounds(cycleLeftInner.removeFromRight(24).reduced(1));
         cycleLeftValueEditor.setBounds(cycleLeftInner);
         lcdArea.removeFromLeft(spacing);
-        layoutPanel(cycleRightPanel, cycleRightTitleLabel, lcdArea.removeFromLeft(panelWidth));
+        layoutPanel(cycleRightPanel, cycleRightTitleLabel, lcdArea.removeFromLeft(cycleRightWidth));
         auto cycleRightInner = cycleRightPanel.getBounds().reduced(8, 5);
         cycleRightInner.removeFromTop(13);
         cycleRightSetButton.setBounds(cycleRightInner.removeFromRight(24).reduced(1));
         cycleRightValueEditor.setBounds(cycleRightInner);
         lcdArea.removeFromLeft(spacing);
-        layoutPanel(signaturePanel, signatureTitleLabel, lcdArea.removeFromLeft(panelWidth));
+        layoutPanel(signaturePanel, signatureTitleLabel, lcdArea.removeFromLeft(signatureWidth));
         auto signatureInner = signaturePanel.getBounds().reduced(8, 5);
         signatureInner.removeFromTop(13);
         signatureValueLabel.setBounds(signatureInner);
         lcdArea.removeFromLeft(spacing);
-        layoutPanel(keyPanel, keyTitleLabel, lcdArea);
+        layoutPanel(keyPanel, keyTitleLabel, lcdArea.removeFromLeft(keyWidth));
         auto keyInner = keyPanel.getBounds().reduced(8, 5);
         keyInner.removeFromTop(13);
         keyValueLabel.setBounds(keyInner);
@@ -1005,8 +1020,23 @@ private:
     void configureTransportButton(TextButton& button, const String& text, std::function<void()> onClick)
     {
         configureButton(button, text, std::move(onClick));
-        button.setColour(TextButton::buttonColourId, Colour::fromRGB(58, 64, 78));
-        button.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.92f));
+        button.setColour(TextButton::buttonColourId, Colour::fromRGB(53, 59, 72));
+        button.setColour(TextButton::buttonOnColourId, Colour::fromRGB(74, 82, 98));
+        button.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.88f));
+        button.setColour(TextButton::textColourOnId, Colours::white.withAlpha(0.96f));
+    }
+
+    void configurePrimaryTransportButton(TextButton& button,
+                                         const String& text,
+                                         Colour offColour,
+                                         Colour onColour,
+                                         std::function<void()> onClick)
+    {
+        configureButton(button, text, std::move(onClick));
+        button.setColour(TextButton::buttonColourId, offColour);
+        button.setColour(TextButton::buttonOnColourId, onColour);
+        button.setColour(TextButton::textColourOffId, Colours::white.withAlpha(0.94f));
+        button.setColour(TextButton::textColourOnId, Colours::white);
     }
 
     void configureButton(TextButton& button, const String& text, std::function<void()> onClick)
@@ -1094,6 +1124,10 @@ private:
         cycleButton.setToggleState(state.cycleEnabled, dontSendNotification);
         metronomeButton.setToggleState(state.metronomeEnabled, dontSendNotification);
         countInButton.setToggleState(state.countInEnabled, dontSendNotification);
+        stopButton.setColour(TextButton::buttonColourId,
+                             state.playing || state.recording ? Colour::fromRGB(62, 69, 84) : Colour::fromRGB(49, 54, 66));
+        backButton.setColour(TextButton::buttonColourId,
+                             state.playheadBeat > 1.01 ? Colour::fromRGB(58, 64, 78) : Colour::fromRGB(44, 48, 58));
     }
 
     void timerCallback() override
